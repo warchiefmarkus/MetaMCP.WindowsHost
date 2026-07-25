@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MetaMCP.Host/MetaMCP.Host.csproj" />
+    <Project Path="src/MetaMCP.Packager/MetaMCP.Packager.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/svg2png/svg2png.csproj" />
+  </Folder>
+</Solution>
