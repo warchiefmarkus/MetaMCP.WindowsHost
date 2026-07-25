@@ -1,0 +1,159 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Run: MetaMCP.Host (Release portable)",
+      "type": "shell",
+      "command": "Release\\MetaMCP.exe",
+      "group": "launch",
+      "isBackground": true,
+      "problemMatcher": [],
+      "detail": "Запускає готовий MetaMCP.exe з Release-папки",
+      "presentation": {
+        "reveal": "silent"
+      }
+    },
+    {
+      "label": "Package: Створити реліз",
+      "type": "shell",
+      "command": "dotnet run --project src\\MetaMCP.Packager -c Release -- --repo C:\\DEV\\LLM\\metamcp",
+      "group": "none",
+      "problemMatcher": [],
+      "detail": "Запускає пакувальник для створення повного релізу в ./Release"
+    },
+    {
+      "label": "Dev: Quick (Host)",
+      "type": "shell",
+      "command": "dotnet build src\\MetaMCP.Host -c Debug -q && dotnet run --project src\\MetaMCP.Host -c Debug -- --base Release",
+      "group": "launch",
+      "isBackground": true,
+      "problemMatcher": [],
+      "detail": "Швидкий запуск: збирає Host (Debug) та запускає з Release. Без пакувальника.",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "Dev: Rebuild + Run (Host + Packager)",
+      "type": "shell",
+      "command": "dotnet build src\\MetaMCP.Host -c Debug -q && dotnet run --project src\\MetaMCP.Packager -c Release -- --repo C:\\DEV\\LLM\\metamcp && dotnet run --project src\\MetaMCP.Host -c Debug -- --base Release",
+      "group": "launch",
+      "isBackground": true,
+      "problemMatcher": [],
+      "detail": "Повне перепакування + запуск Host (Debug). Повільно.",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+
+    {
+      "label": "Build: MetaMCP.Host (Release)",
+      "type": "shell",
+      "command": "dotnet build src\\MetaMCP.Host -c Release",
+      "group": "build",
+      "problemMatcher": "$msCompile",
+      "detail": "Збирає MetaMCP.Host у Release"
+    },
+    {
+      "label": "Build: MetaMCP.Host (Debug)",
+      "type": "shell",
+      "command": "dotnet build src\\MetaMCP.Host -c Debug",
+      "group": "build",
+      "problemMatcher": "$msCompile",
+      "detail": "Збирає MetaMCP.Host у Debug"
+    },
+    {
+      "label": "Build: MetaMCP.Packager (Release)",
+      "type": "shell",
+      "command": "dotnet build src\\MetaMCP.Packager -c Release",
+      "group": "build",
+      "problemMatcher": "$msCompile",
+      "detail": "Збирає MetaMCP.Packager у Release"
+    },
+    {
+      "label": "Build: MetaMCP.Packager (Debug)",
+      "type": "shell",
+      "command": "dotnet build src\\MetaMCP.Packager -c Debug",
+      "group": "build",
+      "problemMatcher": "$msCompile",
+      "detail": "Збирає MetaMCP.Packager у Debug"
+    },
+    {
+      "label": "Run: MetaMCP.Host (Debug)",
+      "type": "shell",
+      "command": "dotnet run --project src\\MetaMCP.Host",
+      "group": "launch",
+      "problemMatcher": [],
+      "detail": "Запускає MetaMCP.Host у tray-режимі (Debug)",
+      "dependsOn": "Build: MetaMCP.Host (Debug)"
+    },
+
+    {
+      "label": "Run: MetaMCP.Packager (Debug)",
+      "type": "shell",
+      "command": "dotnet run --project src\\MetaMCP.Packager",
+      "group": "launch",
+      "problemMatcher": [],
+      "detail": "Запускає MetaMCP.Packager (Debug)",
+      "prompt": {
+        "type": "promptString",
+        "name": "repoPath",
+        "message": "Шлях до джерельного монорепо metamcp (або натисни Enter для default):",
+        "default": "C:\\DEV\\LLM\\metamcp"
+      },
+      "args": ["--repo", "${input:repoPath}"]
+    },
+
+    {
+      "label": "Dev: Backend (tsx watch)",
+      "type": "shell",
+      "command": "cd Release\\metamcp\\backend && pnpm dev",
+      "isBackground": true,
+      "problemMatcher": [],
+      "detail": "Запускає backend у dev-режимі з гарячим перезавантаженням",
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    },
+    {
+      "label": "Dev: Frontend (next dev)",
+      "type": "shell",
+      "command": "cd Release\\metamcp\\frontend && pnpm dev",
+      "isBackground": true,
+      "problemMatcher": [],
+      "detail": "Запускає frontend (Next.js) у dev-режимі на порту 12008",
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    },
+    {
+      "label": "Build: Frontend (next build)",
+      "type": "shell",
+      "command": "cd Release\\metamcp\\frontend && pnpm build",
+      "group": "build",
+      "problemMatcher": [],
+      "detail": "Збирає Next.js frontend"
+    },
+    {
+      "label": "Build: Backend (tsup)",
+      "type": "shell",
+      "command": "cd Release\\metamcp\\backend && pnpm build",
+      "group": "build",
+      "problemMatcher": [],
+      "detail": "Збирає backend через tsup"
+    }
+
+  ],
+  "inputs": [
+    {
+      "id": "repoPath",
+      "type": "promptString",
+      "description": "Шлях до джерельного монорепо metamcp",
+      "default": "C:\\DEV\\LLM\\metamcp"
+    }
+  ]
+}
