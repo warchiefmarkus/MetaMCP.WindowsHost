@@ -1,0 +1,33 @@
+{
+  "FrontendPort": 12008,
+  "BackendPort": 12009,
+  "DatabaseHost": "127.0.0.1",
+  "DatabasePort": 5432,
+  "RunMigrationsOnStart": true,
+  "AutoStartRuntime": true,
+  "AutoRestart": true,
+  "RestartDelaySeconds": 5,
+  "HealthCheckIntervalSeconds": 10,
+  "HealthCheckTimeoutMilliseconds": 1500,
+  "UnhealthyChecksBeforeRestart": 3,
+  "StartupTimeoutSeconds": 90,
+  "LoggingEnabled": false,
+  "OpenBrowserOnPortableStart": false,
+  "ReverseSsh": {
+    "Enabled": true,
+    "Host": "oracle_freevps2arm",
+    "HostName": null,
+    "User": null,
+    "Port": 0,
+    "PrivateKeyPath": null,
+    "PrivateKeyPassphrase": null,
+    "Password": null,
+    "HostKeyFingerprint": null,
+    "RemoteBindHost": "127.0.0.1",
+    "RemotePort": 18080,
+    "LocalHost": "127.0.0.1",
+    "LocalPort": 12008,
+    "ConnectTimeoutSeconds": 15,
+    "ReconnectDelaySeconds": 10
+  }
+}
