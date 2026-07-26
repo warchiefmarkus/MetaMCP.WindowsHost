@@ -18,6 +18,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _frontendItem;
     private readonly ToolStripMenuItem _databaseItem;
     private readonly ToolStripMenuItem _sshItem;
+    private readonly ToolStripMenuItem _mappingItem;
+    private readonly Dictionary<string, ToolStripMenuItem> _mappingItems =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly ToolStripMenuItem _startItem;
     private readonly ToolStripMenuItem _stopItem;
     private readonly ToolStripMenuItem _restartItem;
@@ -54,6 +57,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _frontendItem = CreateStatusItem("Frontend: checking...");
         _databaseItem = CreateStatusItem("PostgreSQL: checking...");
         _sshItem = CreateStatusItem("Reverse SSH: checking...");
+        _mappingItem = new ToolStripMenuItem("Reverse SSH mapping");
+        BuildMappingMenu();
         _menu.Items.AddRange([
             _modeItem,
             new ToolStripSeparator(),
@@ -62,6 +67,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
             _frontendItem,
             _databaseItem,
             _sshItem,
+            new ToolStripSeparator(),
+            _mappingItem,
             new ToolStripSeparator(),
         ]);
 
@@ -149,6 +156,58 @@ internal sealed class TrayApplicationContext : ApplicationContext
     {
         _settings = HostSettings.Load(_baseDirectory);
         _portableRuntime = new RuntimeController(_baseDirectory, _settings);
+    }
+
+    private void BuildMappingMenu()
+    {
+        _mappingItems.Clear();
+        _mappingItem.DropDownItems.Clear();
+        foreach (var mapping in _settings.ReverseSsh.Mappings)
+        {
+            var item = new ToolStripMenuItem(
+                $"{mapping.DisplayName}  ({mapping.PublicPath} -> VPS:{mapping.RemotePort})")
+            {
+                Tag = mapping.Id,
+                CheckOnClick = false,
+                Checked = mapping.Id.Equals(
+                    _settings.ReverseSsh.ActiveMapping,
+                    StringComparison.OrdinalIgnoreCase),
+            };
+            item.Click += async (_, _) => await SelectMappingAsync(mapping.Id);
+            _mappingItems[mapping.Id] = item;
+            _mappingItem.DropDownItems.Add(item);
+        }
+    }
+
+    private async Task SelectMappingAsync(string mappingId)
+    {
+        await RunBusyAsync(async () =>
+        {
+            RuntimeStatus status;
+            if (_serviceMode)
+            {
+                var response = await PipeClient.SendAsync(
+                    PipeCommands.SelectMapping,
+                    timeout: TimeSpan.FromSeconds(20),
+                    mappingId: mappingId);
+                EnsurePipeSuccess(response);
+                status = response.Status!;
+                _settings = HostSettings.Load(_baseDirectory);
+                BuildMappingMenu();
+            }
+            else
+            {
+                _portableRuntime ??= new RuntimeController(_baseDirectory, _settings);
+                status = await _portableRuntime.SwitchReverseSshMappingAsync(mappingId);
+            }
+
+            UpdateStatusMenu(status);
+            var mapping = _settings.ReverseSsh.GetMapping(mappingId);
+            ShowBalloon(
+                "Reverse SSH mapping changed",
+                $"{mapping.DisplayName}: {mapping.PublicPath} via VPS port {mapping.RemotePort}.",
+                ToolTipIcon.Info);
+        }, "Could not change reverse SSH mapping");
     }
 
     private async Task StartRuntimeAsync()
@@ -333,6 +392,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 ComponentState.Offline,
                 ComponentState.Offline,
                 _settings.ReverseSsh.Enabled ? ComponentState.Offline : ComponentState.Disabled,
+                _settings.ReverseSsh.ActiveMapping,
                 null,
                 null,
                 serviceError,
@@ -346,13 +406,46 @@ internal sealed class TrayApplicationContext : ApplicationContext
         SetComponentItem(_backendItem, "Backend", status.Backend);
         SetComponentItem(_frontendItem, "Frontend", status.Frontend);
         SetComponentItem(_databaseItem, "PostgreSQL", status.Database);
-        SetComponentItem(_sshItem, "Reverse SSH", status.ReverseSsh);
+        var mapping = ResolveMapping(status.ReverseSshMappingId);
+        SetComponentItem(
+            _sshItem,
+            mapping is null ? "Reverse SSH" : $"Reverse SSH [{mapping.DisplayName}]",
+            status.ReverseSsh);
+        UpdateMappingSelection(status.ReverseSshMappingId);
+        _mappingItem.Enabled = !_busy && _settings.ReverseSsh.Enabled;
         _startItem.Enabled = !_busy && !status.DesiredRunning;
         _stopItem.Enabled = !_busy && status.DesiredRunning;
         _restartItem.Enabled = !_busy && status.DesiredRunning;
 
         var tooltip = $"MetaMCP: {GetOverallText(status.Overall)}";
         _notifyIcon.Text = tooltip.Length <= 63 ? tooltip : tooltip[..63];
+    }
+
+    private ReverseSshMappingSettings? ResolveMapping(string? mappingId)
+    {
+        var id = string.IsNullOrWhiteSpace(mappingId)
+            ? _settings.ReverseSsh.ActiveMapping
+            : mappingId;
+        return _settings.ReverseSsh.Mappings.FirstOrDefault(mapping =>
+            mapping.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void UpdateMappingSelection(string? mappingId)
+    {
+        var activeId = string.IsNullOrWhiteSpace(mappingId)
+            ? _settings.ReverseSsh.ActiveMapping
+            : mappingId;
+        foreach (var pair in _mappingItems)
+        {
+            pair.Value.Checked = pair.Key.Equals(
+                activeId,
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        var mapping = ResolveMapping(activeId);
+        _mappingItem.Text = mapping is null
+            ? "Reverse SSH mapping"
+            : $"Tunnel: {mapping.DisplayName} ({mapping.PublicPath})";
     }
 
     private void SetOverallItem(OverallState state)
@@ -419,6 +512,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _startItem.Enabled = !busy;
         _stopItem.Enabled = !busy;
         _restartItem.Enabled = !busy;
+        _mappingItem.Enabled = !busy && _settings.ReverseSsh.Enabled;
         _installServiceItem.Enabled = !busy;
         _uninstallServiceItem.Enabled = !busy;
     }
@@ -491,7 +585,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
     {
         try
         {
-            Process.Start(new ProcessStartInfo(HostConstants.FrontendUrl)
+            Process.Start(new ProcessStartInfo(
+                $"http://localhost:{_settings.FrontendPort}")
             {
                 UseShellExecute = true,
             });

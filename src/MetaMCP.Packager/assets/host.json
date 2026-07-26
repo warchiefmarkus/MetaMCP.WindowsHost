@@ -23,10 +23,27 @@
     "PrivateKeyPassphrase": null,
     "Password": null,
     "HostKeyFingerprint": null,
-    "RemoteBindHost": "127.0.0.1",
-    "RemotePort": 18080,
-    "LocalHost": "127.0.0.1",
-    "LocalPort": 12008,
+    "ActiveMapping": "legion",
+    "Mappings": [
+      {
+        "Id": "legion",
+        "DisplayName": "Legion PC",
+        "PublicPath": "/metamcp",
+        "RemoteBindHost": "127.0.0.1",
+        "RemotePort": 18080,
+        "LocalHost": "127.0.0.1",
+        "LocalPort": 12008
+      },
+      {
+        "Id": "thinkpad",
+        "DisplayName": "ThinkPad",
+        "PublicPath": "/metamcpthp",
+        "RemoteBindHost": "127.0.0.1",
+        "RemotePort": 18082,
+        "LocalHost": "127.0.0.1",
+        "LocalPort": 12008
+      }
+    ],
     "ConnectTimeoutSeconds": 15,
     "ReconnectDelaySeconds": 10
   }

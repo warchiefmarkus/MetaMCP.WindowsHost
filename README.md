@@ -79,23 +79,49 @@ Uninstall Windows Service
 `Start`, `Stop`, `Restart` через локальний named pipe. `Exit` у service-режимі
 закриває лише tray, а служба продовжує працювати.
 
-## Reverse SSH
+## Reverse SSH profiles
 
 Tunnel реалізований у C# через SSH.NET; окремий `ssh.exe` не запускається.
 За замовчуванням читається alias `oracle_freevps2arm` із `%USERPROFILE%\.ssh\config`.
 Для service-режиму alias розв’язується під час встановлення служби.
 
-Основні параметри tunnel:
+`config\host.json` містить іменовані mapping-профілі. У tray-меню є вкладене меню
+`Tunnel: ...`, де активний профіль можна змінити без перезапуску frontend/backend:
+перезапускається тільки reverse SSH tunnel, а вибір зберігається в `host.json`.
 
 ```json
-{
+"ReverseSsh": {
+  "Enabled": true,
   "Host": "oracle_freevps2arm",
-  "RemoteBindHost": "127.0.0.1",
-  "RemotePort": 18080,
-  "LocalHost": "127.0.0.1",
-  "LocalPort": 12008
+  "ActiveMapping": "legion",
+  "Mappings": [
+    {
+      "Id": "legion",
+      "DisplayName": "Legion PC",
+      "PublicPath": "/metamcp",
+      "RemoteBindHost": "127.0.0.1",
+      "RemotePort": 18080,
+      "LocalHost": "127.0.0.1",
+      "LocalPort": 12008
+    },
+    {
+      "Id": "thinkpad",
+      "DisplayName": "ThinkPad",
+      "PublicPath": "/metamcpthp",
+      "RemoteBindHost": "127.0.0.1",
+      "RemotePort": 18082,
+      "LocalHost": "127.0.0.1",
+      "LocalPort": 12008
+    }
+  ]
 }
 ```
+
+VPS port `18081` і public path `/metamcppct` зарезервовані за Proxmox і навмисно
+не входять у Windows-профілі. Для нового ПК додається новий mapping з унікальним
+`Id`, public path і VPS remote port, після чого аналогічний location додається в nginx.
+
+Старий конфіг з одиночними `RemotePort`/`LocalPort` автоматично мігрується до профілів.
 
 ## Важливо
 

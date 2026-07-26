@@ -6,6 +6,7 @@ namespace MetaMCP.Host;
 
 internal sealed class RuntimeController : IAsyncDisposable
 {
+    private readonly string _baseDirectory;
     private readonly HostSettings _settings;
     private readonly RuntimeLayout _layout;
     private readonly Dictionary<string, string> _environment;
@@ -32,13 +33,16 @@ internal sealed class RuntimeController : IAsyncDisposable
 
     public RuntimeController(string baseDirectory, HostSettings settings)
     {
+        _baseDirectory = baseDirectory;
         _settings = settings;
         _layout = new RuntimeLayout(baseDirectory);
         _environment = EnvFile.Load(_layout.EnvironmentFile);
         PrepareEnvironment();
         _tunnel = new ReverseSshTunnel(settings.ReverseSsh);
         _tunnel.StateChanged += () => _ = RefreshStatusAsync();
-        _status = RuntimeStatus.Stopped(settings.ReverseSsh.Enabled);
+        _status = RuntimeStatus.Stopped(
+            settings.ReverseSsh.Enabled,
+            settings.ReverseSsh.ActiveMapping);
         _monitorTask = Task.Run(() => MonitorLoopAsync(_lifetime.Token));
     }
 
@@ -131,6 +135,40 @@ internal sealed class RuntimeController : IAsyncDisposable
         }
     }
 
+    public async Task<RuntimeStatus> SwitchReverseSshMappingAsync(
+        string mappingId,
+        CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            ThrowIfDisposed();
+            var mapping = _settings.ReverseSsh.GetMapping(mappingId);
+            if (_settings.ReverseSsh.ActiveMapping.Equals(
+                    mapping.Id,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return await RefreshStatusAsync(cancellationToken);
+            }
+
+            _settings.ReverseSsh.ActiveMapping = mapping.Id;
+            _settings.Save(_baseDirectory);
+
+            await _tunnel.StopAsync();
+            if (_desiredRunning && _settings.ReverseSsh.Enabled)
+            {
+                _tunnel.Start();
+            }
+
+            _lastError = null;
+            return await RefreshStatusAsync(cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public async Task<RuntimeStatus> RefreshStatusAsync(
         CancellationToken cancellationToken = default)
     {
@@ -163,6 +201,7 @@ internal sealed class RuntimeController : IAsyncDisposable
             await frontendTask ? ComponentState.Online : ComponentState.Offline,
             await databaseTask ? ComponentState.Online : ComponentState.Offline,
             _settings.ReverseSsh.Enabled ? _tunnel.State : ComponentState.Disabled,
+            _settings.ReverseSsh.ActiveMapping,
             GetPid(_backend),
             GetPid(_frontend),
             _lastError ?? _tunnel.LastError,
@@ -544,6 +583,7 @@ internal sealed class RuntimeController : IAsyncDisposable
             ComponentState.Starting,
             ComponentState.Starting,
             _settings.ReverseSsh.Enabled ? ComponentState.Starting : ComponentState.Disabled,
+            _settings.ReverseSsh.ActiveMapping,
             GetPid(_backend),
             GetPid(_frontend),
             null,

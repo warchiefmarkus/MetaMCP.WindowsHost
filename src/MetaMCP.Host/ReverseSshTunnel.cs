@@ -90,6 +90,7 @@ internal sealed class ReverseSshTunnel : IAsyncDisposable
             try
             {
                 SetState(ComponentState.Starting, null);
+                var mapping = _settings.GetActiveMapping();
                 var endpoint = OpenSshConfig.Resolve(_settings);
                 var methods = BuildAuthenticationMethods(endpoint);
                 var connectionInfo = new ConnectionInfo(
@@ -114,10 +115,10 @@ internal sealed class ReverseSshTunnel : IAsyncDisposable
 
                 await Task.Run(client.Connect, cancellationToken);
                 using var forward = new ForwardedPortRemote(
-                    _settings.RemoteBindHost,
-                    _settings.RemotePort,
-                    _settings.LocalHost,
-                    _settings.LocalPort);
+                    mapping.RemoteBindHost,
+                    mapping.RemotePort,
+                    mapping.LocalHost,
+                    mapping.LocalPort);
                 client.AddForwardedPort(forward);
                 forward.Start();
                 SetState(ComponentState.Online, null);

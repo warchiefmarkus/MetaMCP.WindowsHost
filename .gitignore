@@ -1,11 +1,11 @@
 **/bin/
 **/obj/
 Release/
+Release-Universal/
 .host-publish/
 .host-publish-final/
 .host-publish-test/
 .host-publish-recovery/
-.host-publish-final/
 .packager-data-backup/
 .deploy-hoisted-test/
 .normalize-test-moved/

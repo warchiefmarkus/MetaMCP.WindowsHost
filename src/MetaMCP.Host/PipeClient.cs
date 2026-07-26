@@ -10,7 +10,8 @@ internal static class PipeClient
     public static async Task<PipeResponse> SendAsync(
         string command,
         TimeSpan? timeout = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? mappingId = null)
     {
         using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutSource.CancelAfter(timeout ?? TimeSpan.FromSeconds(5));
@@ -38,7 +39,7 @@ internal static class PipeClient
             AutoFlush = true,
         };
 
-        var request = new PipeRequest(command);
+        var request = new PipeRequest(command, mappingId);
         await writer.WriteLineAsync(JsonSerializer.Serialize(request, PipeJson.Options));
         var responseLine = await reader.ReadLineAsync(timeoutSource.Token);
         return responseLine is null

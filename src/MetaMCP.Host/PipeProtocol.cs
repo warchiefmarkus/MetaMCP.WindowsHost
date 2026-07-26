@@ -16,9 +16,10 @@ internal static class PipeCommands
     public const string Start = "start";
     public const string Stop = "stop";
     public const string Restart = "restart";
+    public const string SelectMapping = "select-mapping";
 }
 
-internal sealed record PipeRequest(string Command);
+internal sealed record PipeRequest(string Command, string? MappingId = null);
 
 internal sealed record PipeResponse(
     bool Success,

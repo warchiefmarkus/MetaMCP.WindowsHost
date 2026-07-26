@@ -24,6 +24,7 @@ internal sealed record RuntimeStatus(
     ComponentState Frontend,
     ComponentState Database,
     ComponentState ReverseSsh,
+    string? ReverseSshMappingId,
     int? BackendPid,
     int? FrontendPid,
     string? LastError,
@@ -56,12 +57,13 @@ internal sealed record RuntimeStatus(
         }
     }
 
-    public static RuntimeStatus Stopped(bool sshEnabled) => new(
+    public static RuntimeStatus Stopped(bool sshEnabled, string? mappingId) => new(
         false,
         ComponentState.Offline,
         ComponentState.Offline,
         ComponentState.Offline,
         sshEnabled ? ComponentState.Offline : ComponentState.Disabled,
+        mappingId,
         null,
         null,
         null,

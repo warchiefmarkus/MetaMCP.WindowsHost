@@ -65,7 +65,7 @@ internal sealed class PipeServer(RuntimeController runtime)
                 : JsonSerializer.Deserialize<PipeRequest>(line, PipeJson.Options);
             response = request is null
                 ? PipeResponse.Fail("Invalid pipe request.")
-                : await ExecuteAsync(request.Command, cancellationToken);
+                : await ExecuteAsync(request, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -77,10 +77,10 @@ internal sealed class PipeServer(RuntimeController runtime)
     }
 
     private async Task<PipeResponse> ExecuteAsync(
-        string command,
+        PipeRequest request,
         CancellationToken cancellationToken)
     {
-        switch (command.Trim().ToLowerInvariant())
+        switch (request.Command.Trim().ToLowerInvariant())
         {
             case PipeCommands.Status:
                 return PipeResponse.Ok(await _runtime.RefreshStatusAsync(cancellationToken));
@@ -93,8 +93,20 @@ internal sealed class PipeServer(RuntimeController runtime)
             case PipeCommands.Restart:
                 await _runtime.RestartAsync(cancellationToken);
                 return PipeResponse.Ok(await _runtime.RefreshStatusAsync(cancellationToken));
+            case PipeCommands.SelectMapping:
+                if (string.IsNullOrWhiteSpace(request.MappingId))
+                {
+                    return PipeResponse.Fail(
+                        "MappingId is required for select-mapping.",
+                        _runtime.CurrentStatus);
+                }
+                return PipeResponse.Ok(await _runtime.SwitchReverseSshMappingAsync(
+                    request.MappingId,
+                    cancellationToken));
             default:
-                return PipeResponse.Fail($"Unknown command: {command}", _runtime.CurrentStatus);
+                return PipeResponse.Fail(
+                    $"Unknown command: {request.Command}",
+                    _runtime.CurrentStatus);
         }
     }
 
