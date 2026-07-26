@@ -95,6 +95,13 @@ internal sealed class TrayApplicationContext : ApplicationContext
             ContextMenuStrip = _menu,
         };
         _notifyIcon.DoubleClick += (_, _) => OpenFrontend();
+        _notifyIcon.MouseClick += (_, e) =>
+        {
+            if (e.Button == MouseButtons.Right)
+            {
+                _menu.Show(Cursor.Position);
+            }
+        };
 
         _timer = new System.Windows.Forms.Timer
         {
