@@ -1,10 +1,6 @@
 **/bin/
 **/obj/
-Release/
-Release-Universal/
-Release-linux-x64/
-Release-linux-arm64/
-Release-Multi/
+Release*/
 Artifacts/
 .host-publish/
 .package-staging/

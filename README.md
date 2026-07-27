@@ -12,7 +12,7 @@ C:\DEV\LLM\
     ├── src\MetaMCP.Host.Windows\
     ├── src\MetaMCP.Host.Linux\
     ├── src\MetaMCP.Packager\
-    ├── Release-Universal\
+    ├── Release\
     └── Artifacts\
 ```
 
@@ -29,7 +29,7 @@ Linux executable має назву `metamcp-host`.
 dotnet run --project .\src\MetaMCP.Packager -c Release -- `
   --repo C:\DEV\LLM\metamcp `
   --target win-x64 `
-  --output Release-Universal
+  --output Release
 ```
 
 Доступні target-и:
@@ -73,7 +73,7 @@ Build: MetaMCP.Host.Linux (Release)
 Windows host запускається як portable tray application або Windows Service.
 
 ```text
-Release-Universal\MetaMCP.exe
+Release\MetaMCP.exe
 ```
 
 Tray дозволяє:
@@ -218,7 +218,7 @@ AArch64 Node.js runtime. Для фактичного smoke-test потрібен
 ## Важливо
 
 - Не запускай повторне пакування в output, з якого зараз працює host.
-- Для Legion використовуй окремий `Release-Universal`; multi-platform build пише в інший каталог.
+- Для Legion використовуй окремий `Release`; multi-platform build пише в інший каталог.
 - Не зберігай реальні API keys, SSH private keys або паролі в Git.
 - `Artifacts`, `Release-*`, staging, runtime cache та build logs виключені з Git.
 - `LoggingEnabled: false` вимикає файлові runtime-логи, але Linux status лишається в journald/stdout.

@@ -24,7 +24,7 @@
     {
       "label": "Package: Windows x64",
       "type": "shell",
-      "command": "dotnet run --project src\\MetaMCP.Packager -c Release -- --repo C:\\DEV\\LLM\\metamcp --target win-x64 --output Release-Universal",
+      "command": "dotnet run --project src\\MetaMCP.Packager -c Release -- --repo C:\\DEV\\LLM\\metamcp --target win-x64 --output Release",
       "group": "build",
       "problemMatcher": []
     },
