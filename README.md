@@ -165,12 +165,21 @@ config/.env.local
       "RemotePort": 18080,
       "LocalHost": "127.0.0.1",
       "LocalPort": 12008
+    },
+    {
+      "Id": "proxmox",
+      "DisplayName": "Proxmox",
+      "PublicPath": "/metamcppct",
+      "RemoteBindHost": "127.0.0.1",
+      "RemotePort": 18081,
+      "LocalHost": "127.0.0.1",
+      "LocalPort": 12008
     }
   ]
 }
 ```
 Для кожного ПК або сервера використовується унікальний VPS `RemotePort`.
-Порт `18081` зарезервований за Proxmox `/metamcppct`; Windows mappings його не займають.
+Mapping `proxmox` використовує VPS `18081` і nginx path `/metamcppct`; на Windows його не слід обирати.
 
 SSH.NET читає alias з користувацького `~/.ssh/config`. Для service deployment
 можна зберегти розв’язані `HostName`, `User`, `Port`, `PrivateKeyPath` і fingerprint
