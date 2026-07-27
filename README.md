@@ -12,8 +12,12 @@ C:\DEV\LLM\
     ├── src\MetaMCP.Host.Windows\
     ├── src\MetaMCP.Host.Linux\
     ├── src\MetaMCP.Packager\
-    ├── Release\
-    └── Artifacts\
+    └── Release\
+        ├── win-x64\
+        ├── linux-x64\
+        ├── linux-x64.tar.gz
+        ├── linux-arm64\
+        └── linux-arm64.tar.gz
 ```
 
 - `MetaMCP.Host.Core` — конфіг, runtime controller, health checks і reverse SSH.
@@ -29,7 +33,7 @@ Linux executable має назву `metamcp-host`.
 dotnet run --project .\src\MetaMCP.Packager -c Release -- `
   --repo C:\DEV\LLM\metamcp `
   --target win-x64 `
-  --output Release
+  --output Release\win-x64
 ```
 
 Доступні target-и:
@@ -47,8 +51,21 @@ Linux x64:
 dotnet run --project .\src\MetaMCP.Packager -c Release -- `
   --repo C:\DEV\LLM\metamcp `
   --target linux-x64 `
-  --output Artifacts\linux-x64
+  --output Release\linux-x64
 ```
+
+Фінальний layout:
+
+```text
+Release/
+├── win-x64/
+├── linux-x64/
+├── linux-x64.tar.gz
+├── linux-arm64/
+└── linux-arm64.tar.gz
+```
+
+Окремі target-и пишуть у відповідний підкаталог. `--target all` використовує корінь `Release`.
 
 Для повторної збірки можна додати `--skip-install`.
 `--target all` виконує production build MetaMCP один раз і створює всі три пакети.
@@ -73,7 +90,7 @@ Build: MetaMCP.Host.Linux (Release)
 Windows host запускається як portable tray application або Windows Service.
 
 ```text
-Release\MetaMCP.exe
+Release\win-x64\MetaMCP.exe
 ```
 
 Tray дозволяє:
@@ -227,7 +244,7 @@ AArch64 Node.js runtime. Для фактичного smoke-test потрібен
 ## Важливо
 
 - Не запускай повторне пакування в output, з якого зараз працює host.
-- Для Legion використовуй окремий `Release`; multi-platform build пише в інший каталог.
+- Усі platform packages зберігаються в єдиному каталозі `Release` у власних підкаталогах.
 - Не зберігай реальні API keys, SSH private keys або паролі в Git.
-- `Artifacts`, `Release-*`, staging, runtime cache та build logs виключені з Git.
+- `Release*`, staging, runtime cache та build logs виключені з Git.
 - `LoggingEnabled: false` вимикає файлові runtime-логи, але Linux status лишається в journald/stdout.

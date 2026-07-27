@@ -4,11 +4,11 @@
     {
       "label": "Run: MetaMCP.Host.Windows (Release portable)",
       "type": "shell",
-      "command": "Release\\MetaMCP.exe",
+      "command": "Release\\win-x64\\MetaMCP.exe",
       "group": "launch",
       "isBackground": true,
       "problemMatcher": [],
-      "detail": "Запускає готовий MetaMCP.exe з Release-папки",
+      "detail": "Запускає готовий MetaMCP.exe з Release\\win-x64",
       "presentation": {
         "reveal": "silent"
       }
@@ -16,7 +16,7 @@
     {
       "label": "Package: Select target",
       "type": "shell",
-      "command": "dotnet run --project src\\MetaMCP.Packager -c Release -- --repo C:\\DEV\\LLM\\metamcp --target ${input:packageTarget} --output Artifacts\\${input:packageTarget}",
+      "command": "dotnet run --project src\\MetaMCP.Packager -c Release -- --repo C:\\DEV\\LLM\\metamcp --target ${input:packageTarget}",
       "group": "build",
       "problemMatcher": [],
       "detail": "Збирає вибраний платформний пакет"
@@ -24,28 +24,28 @@
     {
       "label": "Package: Windows x64",
       "type": "shell",
-      "command": "dotnet run --project src\\MetaMCP.Packager -c Release -- --repo C:\\DEV\\LLM\\metamcp --target win-x64 --output Release",
+      "command": "dotnet run --project src\\MetaMCP.Packager -c Release -- --repo C:\\DEV\\LLM\\metamcp --target win-x64 --output Release\\win-x64",
       "group": "build",
       "problemMatcher": []
     },
     {
       "label": "Package: Linux x64",
       "type": "shell",
-      "command": "dotnet run --project src\\MetaMCP.Packager -c Release -- --repo C:\\DEV\\LLM\\metamcp --target linux-x64 --output Artifacts\\linux-x64",
+      "command": "dotnet run --project src\\MetaMCP.Packager -c Release -- --repo C:\\DEV\\LLM\\metamcp --target linux-x64 --output Release\\linux-x64",
       "group": "build",
       "problemMatcher": []
     },
     {
       "label": "Package: Linux ARM64",
       "type": "shell",
-      "command": "dotnet run --project src\\MetaMCP.Packager -c Release -- --repo C:\\DEV\\LLM\\metamcp --target linux-arm64 --output Artifacts\\linux-arm64",
+      "command": "dotnet run --project src\\MetaMCP.Packager -c Release -- --repo C:\\DEV\\LLM\\metamcp --target linux-arm64 --output Release\\linux-arm64",
       "group": "build",
       "problemMatcher": []
     },
     {
       "label": "Package: All platforms",
       "type": "shell",
-      "command": "dotnet run --project src\\MetaMCP.Packager -c Release -- --repo C:\\DEV\\LLM\\metamcp --target all --output Release-Multi",
+      "command": "dotnet run --project src\\MetaMCP.Packager -c Release -- --repo C:\\DEV\\LLM\\metamcp --target all --output Release",
       "group": "build",
       "problemMatcher": [],
       "detail": "Один production build, потім win-x64, linux-x64 та linux-arm64"
@@ -60,7 +60,7 @@
     {
       "label": "Dev: Quick (Host)",
       "type": "shell",
-      "command": "dotnet build src\\MetaMCP.Host.Windows -c Debug -q && dotnet run --project src\\MetaMCP.Host.Windows -c Debug -- --base Release",
+      "command": "dotnet build src\\MetaMCP.Host.Windows -c Debug -q && dotnet run --project src\\MetaMCP.Host.Windows -c Debug -- --base Release\\win-x64",
       "group": "launch",
       "isBackground": true,
       "problemMatcher": [],
@@ -73,7 +73,7 @@
     {
       "label": "Dev: Rebuild + Run (Host + Packager)",
       "type": "shell",
-      "command": "dotnet build src\\MetaMCP.Host.Windows -c Debug -q && dotnet run --project src\\MetaMCP.Packager -c Release -- --repo C:\\DEV\\LLM\\metamcp && dotnet run --project src\\MetaMCP.Host.Windows -c Debug -- --base Release",
+      "command": "dotnet build src\\MetaMCP.Host.Windows -c Debug -q && dotnet run --project src\\MetaMCP.Packager -c Release -- --repo C:\\DEV\\LLM\\metamcp && dotnet run --project src\\MetaMCP.Host.Windows -c Debug -- --base Release\\win-x64",
       "group": "launch",
       "isBackground": true,
       "problemMatcher": [],
@@ -145,7 +145,7 @@
     {
       "label": "Dev: Backend (tsx watch)",
       "type": "shell",
-      "command": "cd Release\\metamcp\\backend && pnpm dev",
+      "command": "cd Release\\win-x64\\metamcp\\backend && pnpm dev",
       "isBackground": true,
       "problemMatcher": [],
       "detail": "Запускає backend у dev-режимі з гарячим перезавантаженням",
@@ -157,7 +157,7 @@
     {
       "label": "Dev: Frontend (next dev)",
       "type": "shell",
-      "command": "cd Release\\metamcp\\frontend && pnpm dev",
+      "command": "cd Release\\win-x64\\metamcp\\frontend && pnpm dev",
       "isBackground": true,
       "problemMatcher": [],
       "detail": "Запускає frontend (Next.js) у dev-режимі на порту 12008",
@@ -169,7 +169,7 @@
     {
       "label": "Build: Frontend (next build)",
       "type": "shell",
-      "command": "cd Release\\metamcp\\frontend && pnpm build",
+      "command": "cd Release\\win-x64\\metamcp\\frontend && pnpm build",
       "group": "build",
       "problemMatcher": [],
       "detail": "Збирає Next.js frontend"
@@ -177,7 +177,7 @@
     {
       "label": "Build: Backend (tsup)",
       "type": "shell",
-      "command": "cd Release\\metamcp\\backend && pnpm build",
+      "command": "cd Release\\win-x64\\metamcp\\backend && pnpm build",
       "group": "build",
       "problemMatcher": [],
       "detail": "Збирає backend через tsup"

@@ -129,11 +129,11 @@ internal sealed record CommandLineOptions(
 
     private static string DefaultOutputName(string target) => target.ToLowerInvariant() switch
     {
-        "win-x64" => "Release",
-        "linux-x64" => "Release-linux-x64",
-        "linux-arm64" => "Release-linux-arm64",
-        "all" => "Release-Multi",
-        _ => "Release",
+        "win-x64" => Path.Combine("Release", "win-x64"),
+        "linux-x64" => Path.Combine("Release", "linux-x64"),
+        "linux-arm64" => Path.Combine("Release", "linux-arm64"),
+        "all" => "Release",
+        _ => Path.Combine("Release", "win-x64"),
     };
 
     private static string RequireValue(string[] args, ref int index, string option)

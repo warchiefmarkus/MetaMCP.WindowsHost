@@ -1,7 +1,6 @@
 **/bin/
 **/obj/
 Release*/
-Artifacts/
 .host-publish/
 .package-staging/
 .linux-app-staging/
