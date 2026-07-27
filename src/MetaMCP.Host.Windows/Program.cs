@@ -1,4 +1,4 @@
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -83,7 +83,7 @@ internal static class Program
         });
         builder.Services.AddSingleton(settings);
         builder.Services.AddSingleton(
-            _ => new RuntimeController(baseDirectory, settings));
+            _ => new RuntimeController(baseDirectory, settings, new WindowsRuntimePlatform()));
         builder.Services.AddSingleton<PipeServer>();
         builder.Services.AddHostedService<ServiceWorker>();
 

@@ -8,10 +8,11 @@ internal static class Program
         try
         {
             var options = CommandLineOptions.Parse(args);
-            Console.WriteLine("MetaMCP Windows production packager");
+            Console.WriteLine("MetaMCP multi-platform production packager");
             Console.WriteLine($"Source:  {options.Repository}");
             Console.WriteLine($"Output:  {options.Output}");
-            var packager = new ReleasePackager(options);
+            Console.WriteLine($"Targets: {string.Join(", ", options.Targets.Select(target => target.Id))}");
+            var packager = new MultiPlatformPackager(options);
             await packager.RunAsync();
             return 0;
         }

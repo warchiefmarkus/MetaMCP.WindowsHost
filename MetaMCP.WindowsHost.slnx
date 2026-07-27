@@ -1,6 +1,8 @@
 <Solution>
   <Folder Name="/src/">
-    <Project Path="src/MetaMCP.Host/MetaMCP.Host.csproj" />
+    <Project Path="src/MetaMCP.Host.Core/MetaMCP.Host.Core.csproj" />
+    <Project Path="src/MetaMCP.Host.Windows/MetaMCP.Host.Windows.csproj" />
+    <Project Path="src/MetaMCP.Host.Linux/MetaMCP.Host.Linux.csproj" />
     <Project Path="src/MetaMCP.Packager/MetaMCP.Packager.csproj" />
   </Folder>
 </Solution>

@@ -1,93 +1,155 @@
-# MetaMCP Windows Host
+# MetaMCP Host
 
-Окремий Windows-host і production packager для репозиторію MetaMCP.
+Кросплатформний host і production packager для локального репозиторію MetaMCP.
 
 ## Структура
 
 ```text
 C:\DEV\LLM\
-├── metamcp\                 # вихідний репозиторій
-└── MetaMCP.WindowsHost\     # C# host + packager
-    ├── src\MetaMCP.Host\
-    ├── src\MetaMCP.Packager\
-    └── Release\             # готовий автономний runtime
-```
-
-`Release` не потребує глобального Node.js, pnpm, вихідного репозиторію або runtime-збірки.
-Frontend, backend і production dependencies готуються лише packager-ом.
-
-## Створення Release
-
-```powershell
-dotnet run --project .\src\MetaMCP.Packager -c Release -- `
-  --repo C:\DEV\LLM\metamcp
-```
-
-Повторне пакування без `pnpm install`:
-
-```powershell
-dotnet run --project .\src\MetaMCP.Packager -c Release -- `
-  --repo C:\DEV\LLM\metamcp --skip-install
-```
-
-Packager виконує production build, deploy залежностей, self-contained publish EXE,
-валідацію runtime-файлів і реальний smoke-test на портах `12018/12019`.
-
-## Готовий runtime
-
-```text
-Release\
-├── MetaMCP.exe
 ├── metamcp\
-│   ├── backend\
-│   └── frontend\
-├── runtime\node\
-├── config\
-│   ├── .env.local
-│   └── host.json
-├── data\
-└── build-manifest.json
+└── MetaMCP.WindowsHost\
+    ├── src\MetaMCP.Host.Core\
+    ├── src\MetaMCP.Host.Windows\
+    ├── src\MetaMCP.Host.Linux\
+    ├── src\MetaMCP.Packager\
+    ├── Release-Universal\
+    └── Artifacts\
 ```
 
-Звичайний запуск:
+- `MetaMCP.Host.Core` — конфіг, runtime controller, health checks і reverse SSH.
+- `MetaMCP.Host.Windows` — tray UI, Windows Service, named pipe і Job Object.
+- `MetaMCP.Host.Linux` — консольний host для systemd без GUI.
+- `MetaMCP.Packager` — пакети `win-x64`, `linux-x64` та `linux-arm64`.
+
+Windows assembly і executable збережені як `MetaMCP` / `MetaMCP.exe` для сумісності.
+Linux executable має назву `metamcp-host`.
+## Платформні пакети
+
+```powershell
+dotnet run --project .\src\MetaMCP.Packager -c Release -- `
+  --repo C:\DEV\LLM\metamcp `
+  --target win-x64 `
+  --output Release-Universal
+```
+
+Доступні target-и:
 
 ```text
-Release\MetaMCP.exe
+win-x64
+linux-x64
+linux-arm64
+all
 ```
 
-У portable-режимі tray-процес сам володіє frontend, backend і reverse SSH tunnel.
-`Exit` зупиняє весь runtime. Дочірні Node-процеси входять у Windows Job Object,
-тому Windows прибирає їх навіть після аварійного завершення host-а.
+Linux x64:
 
-## Windows Service
+```powershell
+dotnet run --project .\src\MetaMCP.Packager -c Release -- `
+  --repo C:\DEV\LLM\metamcp `
+  --target linux-x64 `
+  --output Artifacts\linux-x64
+```
 
-Tray-меню містить:
+Для повторної збірки можна додати `--skip-install`.
+`--target all` виконує production build MetaMCP один раз і створює всі три пакети.
+## VS Code tasks
+
+У `.vscode/tasks.json` є:
 
 ```text
-Install Windows Service
-Uninstall Windows Service
+Package: Select target
+Package: Windows x64
+Package: Linux x64
+Package: Linux ARM64
+Package: All platforms
+Build: MetaMCP.Host.Windows (Release)
+Build: MetaMCP.Host.Linux (Release)
 ```
 
-Встановлення потребує UAC один раз і автоматично:
+`Package: Select target` пропонує `win-x64`, `linux-x64`, `linux-arm64` або `all`.
 
-- реєструє `MetaMCP.WindowsHost` як delayed-auto Windows service;
-- запускає службу;
-- додає `MetaMCP.exe --tray` після входу користувача;
-- зберігає розв’язані параметри OpenSSH alias у `config\host.json`.
+## Windows host
 
-Служба володіє frontend, backend і tunnel. Tray лише показує статус та передає
-`Start`, `Stop`, `Restart` через локальний named pipe. `Exit` у service-режимі
-закриває лише tray, а служба продовжує працювати.
+Windows host запускається як portable tray application або Windows Service.
 
-## Reverse SSH profiles
+```text
+Release-Universal\MetaMCP.exe
+```
 
-Tunnel реалізований у C# через SSH.NET; окремий `ssh.exe` не запускається.
-За замовчуванням читається alias `oracle_freevps2arm` із `%USERPROFILE%\.ssh\config`.
-Для service-режиму alias розв’язується під час встановлення служби.
+Tray дозволяє:
 
-`config\host.json` містить іменовані mapping-профілі. У tray-меню є вкладене меню
-`Tunnel: ...`, де активний профіль можна змінити без перезапуску frontend/backend:
-перезапускається тільки reverse SSH tunnel, а вибір зберігається в `host.json`.
+- запускати, зупиняти й перезапускати runtime;
+- встановлювати або видаляти Windows Service;
+- перемикати активний reverse SSH mapping без restart frontend/backend;
+- відкривати конфіг і локальний UI.
+У portable mode дочірні Node-процеси входять у Windows Job Object.
+У service mode runtime належить службі, а tray працює як локальний клієнт через named pipe.
+
+## Linux host
+
+Linux пакет містить self-contained .NET executable, MetaMCP frontend/backend,
+вбудований Node.js runtime, конфіг і systemd deployment files.
+
+Ручний запуск:
+
+```bash
+./metamcp-host --base /opt/metamcp
+```
+
+Вибір mapping без зміни `host.json`:
+
+```bash
+./metamcp-host --base /opt/metamcp --mapping proxmox
+```
+
+Пріоритет вибору mapping:
+
+```text
+--mapping
+METAMCP_MAPPING
+ReverseSsh.ActiveMapping у config/host.json
+```
+
+Host обробляє `SIGINT`/`SIGTERM`, пише статус у stdout/journald і коректно
+зупиняє backend, frontend та SSH tunnel.
+## Systemd installation
+
+Після розпакування Linux archive:
+
+```bash
+cd linux-x64
+./deploy/install-systemd.sh /opt/metamcp
+```
+
+Скрипт:
+
+- копіює пакет у `/opt/metamcp`;
+- встановлює executable permissions;
+- створює `/etc/systemd/system/metamcp-host.service`;
+- виконує `daemon-reload`;
+- вмикає та запускає service.
+
+Перевірка:
+
+```bash
+systemctl status metamcp-host --no-pager
+journalctl -u metamcp-host -f
+curl http://127.0.0.1:12009/health
+curl -I http://127.0.0.1:12008
+```
+
+Systemd використовує `KillMode=control-group`, тому при зупинці service
+прибираються host, frontend, backend і дочірні MCP-процеси.
+## Конфігурація
+
+Основні файли пакета:
+
+```text
+config/host.json
+config/.env.local
+```
+
+Приклад reverse SSH mappings:
 
 ```json
 "ReverseSsh": {
@@ -103,33 +165,60 @@ Tunnel реалізований у C# через SSH.NET; окремий `ssh.ex
       "RemotePort": 18080,
       "LocalHost": "127.0.0.1",
       "LocalPort": 12008
-    },
-    {
-      "Id": "thinkpad",
-      "DisplayName": "ThinkPad",
-      "PublicPath": "/metamcpthp",
-      "RemoteBindHost": "127.0.0.1",
-      "RemotePort": 18082,
-      "LocalHost": "127.0.0.1",
-      "LocalPort": 12008
     }
   ]
 }
 ```
+Для кожного ПК або сервера використовується унікальний VPS `RemotePort`.
+Порт `18081` зарезервований за Proxmox `/metamcppct`; Windows mappings його не займають.
 
-VPS port `18081` і public path `/metamcppct` зарезервовані за Proxmox і навмисно
-не входять у Windows-профілі. Для нового ПК додається новий mapping з унікальним
-`Id`, public path і VPS remote port, після чого аналогічний location додається в nginx.
+SSH.NET читає alias з користувацького `~/.ssh/config`. Для service deployment
+можна зберегти розв’язані `HostName`, `User`, `Port`, `PrivateKeyPath` і fingerprint
+безпосередньо в `host.json`.
 
-Старий конфіг з одиночними `RemotePort`/`LocalPort` автоматично мігрується до профілів.
+Старий конфіг з одиночними `RemotePort`/`LocalPort` автоматично мігрується
+до іменованого mapping-профілю.
+
+## Формат Linux archive
+
+```text
+linux-x64/
+├── metamcp-host
+├── metamcp/
+│   ├── backend/
+│   └── frontend/
+├── runtime/node/
+├── config/
+├── data/
+├── deploy/
+│   ├── metamcp-host.service
+│   └── install-systemd.sh
+└── build-manifest.json
+```
+
+Packager зберігає відносні pnpm symlink-и й створює стандартний PAX `tar.gz`,
+який коректно розпаковується GNU tar на Linux.
+## Перевірений стан
+
+Linux x64 пакет перевірений на Proxmox:
+
+```text
+backend health: HTTP 200
+frontend: HTTP 200
+PostgreSQL: online
+reverse SSH: online
+SSH reconnect: успішний без restart frontend/backend
+systemd shutdown: усі процеси й tunnel прибрані
+broken symlinks: 0
+```
+
+Linux ARM64 пакет перевіряється статично як ELF AArch64 разом із вбудованим
+AArch64 Node.js runtime. Для фактичного smoke-test потрібен ARM64 Linux host.
 
 ## Важливо
 
-- Не переміщуй готову `Release` вручну: pnpm production deploy містить junction-и,
-  створені одразу для остаточного шляху. Для іншого місця створи Release повторно
-  через `--output`.
-- Перед повторним пакуванням зупини `Release\MetaMCP.exe` або Windows service.
-- У готовому Release немає наших `.cmd`, `.bat`, `.ps1` чи cleanup-скриптів.
-- `runtime\node\npx.cmd` і `npm.cmd` є штатною частиною portable Node runtime та
-  потрібні MCP-серверам, які запускаються через `npx`.
-- Файлові runtime-логи вимкнені за замовчуванням параметром `LoggingEnabled: false`.
+- Не запускай повторне пакування в output, з якого зараз працює host.
+- Для Legion використовуй окремий `Release-Universal`; multi-platform build пише в інший каталог.
+- Не зберігай реальні API keys, SSH private keys або паролі в Git.
+- `Artifacts`, `Release-*`, staging, runtime cache та build logs виключені з Git.
+- `LoggingEnabled: false` вимикає файлові runtime-логи, але Linux status лишається в journald/stdout.

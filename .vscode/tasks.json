@@ -2,7 +2,7 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Run: MetaMCP.Host (Release portable)",
+      "label": "Run: MetaMCP.Host.Windows (Release portable)",
       "type": "shell",
       "command": "Release\\MetaMCP.exe",
       "group": "launch",
@@ -14,17 +14,53 @@
       }
     },
     {
-      "label": "Package: Створити реліз",
+      "label": "Package: Select target",
       "type": "shell",
-      "command": "dotnet run --project src\\MetaMCP.Packager -c Release -- --repo C:\\DEV\\LLM\\metamcp",
-      "group": "none",
+      "command": "dotnet run --project src\\MetaMCP.Packager -c Release -- --repo C:\\DEV\\LLM\\metamcp --target ${input:packageTarget} --output Artifacts\\${input:packageTarget}",
+      "group": "build",
       "problemMatcher": [],
-      "detail": "Запускає пакувальник для створення повного релізу в ./Release"
+      "detail": "Збирає вибраний платформний пакет"
+    },
+    {
+      "label": "Package: Windows x64",
+      "type": "shell",
+      "command": "dotnet run --project src\\MetaMCP.Packager -c Release -- --repo C:\\DEV\\LLM\\metamcp --target win-x64 --output Release-Universal",
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Package: Linux x64",
+      "type": "shell",
+      "command": "dotnet run --project src\\MetaMCP.Packager -c Release -- --repo C:\\DEV\\LLM\\metamcp --target linux-x64 --output Artifacts\\linux-x64",
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Package: Linux ARM64",
+      "type": "shell",
+      "command": "dotnet run --project src\\MetaMCP.Packager -c Release -- --repo C:\\DEV\\LLM\\metamcp --target linux-arm64 --output Artifacts\\linux-arm64",
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Package: All platforms",
+      "type": "shell",
+      "command": "dotnet run --project src\\MetaMCP.Packager -c Release -- --repo C:\\DEV\\LLM\\metamcp --target all --output Release-Multi",
+      "group": "build",
+      "problemMatcher": [],
+      "detail": "Один production build, потім win-x64, linux-x64 та linux-arm64"
+    },
+    {
+      "label": "Build: MetaMCP.Host.Linux (Release)",
+      "type": "shell",
+      "command": "dotnet build src\\MetaMCP.Host.Linux -c Release",
+      "group": "build",
+      "problemMatcher": "$msCompile"
     },
     {
       "label": "Dev: Quick (Host)",
       "type": "shell",
-      "command": "dotnet build src\\MetaMCP.Host -c Debug -q && dotnet run --project src\\MetaMCP.Host -c Debug -- --base Release",
+      "command": "dotnet build src\\MetaMCP.Host.Windows -c Debug -q && dotnet run --project src\\MetaMCP.Host.Windows -c Debug -- --base Release",
       "group": "launch",
       "isBackground": true,
       "problemMatcher": [],
@@ -37,7 +73,7 @@
     {
       "label": "Dev: Rebuild + Run (Host + Packager)",
       "type": "shell",
-      "command": "dotnet build src\\MetaMCP.Host -c Debug -q && dotnet run --project src\\MetaMCP.Packager -c Release -- --repo C:\\DEV\\LLM\\metamcp && dotnet run --project src\\MetaMCP.Host -c Debug -- --base Release",
+      "command": "dotnet build src\\MetaMCP.Host.Windows -c Debug -q && dotnet run --project src\\MetaMCP.Packager -c Release -- --repo C:\\DEV\\LLM\\metamcp && dotnet run --project src\\MetaMCP.Host.Windows -c Debug -- --base Release",
       "group": "launch",
       "isBackground": true,
       "problemMatcher": [],
@@ -47,22 +83,21 @@
         "panel": "dedicated"
       }
     },
-
     {
-      "label": "Build: MetaMCP.Host (Release)",
+      "label": "Build: MetaMCP.Host.Windows (Release)",
       "type": "shell",
-      "command": "dotnet build src\\MetaMCP.Host -c Release",
+      "command": "dotnet build src\\MetaMCP.Host.Windows -c Release",
       "group": "build",
       "problemMatcher": "$msCompile",
-      "detail": "Збирає MetaMCP.Host у Release"
+      "detail": "Збирає MetaMCP.Host.Windows у Release"
     },
     {
-      "label": "Build: MetaMCP.Host (Debug)",
+      "label": "Build: MetaMCP.Host.Windows (Debug)",
       "type": "shell",
-      "command": "dotnet build src\\MetaMCP.Host -c Debug",
+      "command": "dotnet build src\\MetaMCP.Host.Windows -c Debug",
       "group": "build",
       "problemMatcher": "$msCompile",
-      "detail": "Збирає MetaMCP.Host у Debug"
+      "detail": "Збирає MetaMCP.Host.Windows у Debug"
     },
     {
       "label": "Build: MetaMCP.Packager (Release)",
@@ -81,15 +116,14 @@
       "detail": "Збирає MetaMCP.Packager у Debug"
     },
     {
-      "label": "Run: MetaMCP.Host (Debug)",
+      "label": "Run: MetaMCP.Host.Windows (Debug)",
       "type": "shell",
-      "command": "dotnet run --project src\\MetaMCP.Host",
+      "command": "dotnet run --project src\\MetaMCP.Host.Windows",
       "group": "launch",
       "problemMatcher": [],
-      "detail": "Запускає MetaMCP.Host у tray-режимі (Debug)",
-      "dependsOn": "Build: MetaMCP.Host (Debug)"
+      "detail": "Запускає MetaMCP.Host.Windows у tray-режимі (Debug)",
+      "dependsOn": "Build: MetaMCP.Host.Windows (Debug)"
     },
-
     {
       "label": "Run: MetaMCP.Packager (Debug)",
       "type": "shell",
@@ -103,9 +137,11 @@
         "message": "Шлях до джерельного монорепо metamcp (або натисни Enter для default):",
         "default": "C:\\DEV\\LLM\\metamcp"
       },
-      "args": ["--repo", "${input:repoPath}"]
+      "args": [
+        "--repo",
+        "${input:repoPath}"
+      ]
     },
-
     {
       "label": "Dev: Backend (tsx watch)",
       "type": "shell",
@@ -146,7 +182,6 @@
       "problemMatcher": [],
       "detail": "Збирає backend через tsup"
     }
-
   ],
   "inputs": [
     {
@@ -154,6 +189,18 @@
       "type": "promptString",
       "description": "Шлях до джерельного монорепо metamcp",
       "default": "C:\\DEV\\LLM\\metamcp"
+    },
+    {
+      "id": "packageTarget",
+      "type": "pickString",
+      "description": "Платформа пакета",
+      "options": [
+        "win-x64",
+        "linux-x64",
+        "linux-arm64",
+        "all"
+      ],
+      "default": "win-x64"
     }
   ]
 }

@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 
@@ -10,7 +10,7 @@ internal sealed class RuntimeController : IAsyncDisposable
     private readonly HostSettings _settings;
     private readonly RuntimeLayout _layout;
     private readonly Dictionary<string, string> _environment;
-    private readonly WindowsJob _job = new();
+    private readonly IRuntimePlatform _platform;
     private readonly ReverseSshTunnel _tunnel;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly object _statusSync = new();
@@ -31,11 +31,12 @@ internal sealed class RuntimeController : IAsyncDisposable
     private int _frontendUnhealthyChecks;
     private string? _lastError;
 
-    public RuntimeController(string baseDirectory, HostSettings settings)
+    public RuntimeController(string baseDirectory, HostSettings settings, IRuntimePlatform platform)
     {
         _baseDirectory = baseDirectory;
         _settings = settings;
-        _layout = new RuntimeLayout(baseDirectory);
+        _platform = platform;
+        _layout = new RuntimeLayout(baseDirectory, platform.NodeExecutableRelativePath);
         _environment = EnvFile.Load(_layout.EnvironmentFile);
         PrepareEnvironment();
         _tunnel = new ReverseSshTunnel(settings.ReverseSsh);
@@ -303,7 +304,7 @@ internal sealed class RuntimeController : IAsyncDisposable
 
         try
         {
-            _job.Assign(process);
+            _platform.AttachProcess(process);
         }
         catch
         {
@@ -365,7 +366,7 @@ internal sealed class RuntimeController : IAsyncDisposable
             throw new InvalidOperationException("Could not start database migration.");
         }
 
-        _job.Assign(process);
+        _platform.AttachProcess(process);
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
         await process.WaitForExitAsync(cancellationToken);
@@ -600,7 +601,7 @@ internal sealed class RuntimeController : IAsyncDisposable
         StatusChanged?.Invoke(status);
     }
 
-    private static void EnsurePortAvailable(int port, string name)
+    private void EnsurePortAvailable(int port, string name)
     {
         var listener = new TcpListener(IPAddress.Loopback, port)
         {
@@ -610,68 +611,29 @@ internal sealed class RuntimeController : IAsyncDisposable
         {
             listener.Start();
         }
-        catch (SocketException)
+        catch (SocketException initialError)
         {
-            KillOrphanedNodeOnPort(port, name);
-            // Retry after cleanup
+            if (!_platform.TryCleanupOrphanedNodeProcess(port, name))
+            {
+                throw new InvalidOperationException(
+                    $"Port {port} required by {name} is occupied.",
+                    initialError);
+            }
+
             try
             {
                 listener.Start();
             }
-            catch (SocketException ex)
+            catch (SocketException retryError)
             {
                 throw new InvalidOperationException(
-                    $"Port {port} required by {name} is still occupied after cleanup.", ex);
+                    $"Port {port} required by {name} is still occupied after cleanup.",
+                    retryError);
             }
         }
         finally
         {
             listener.Stop();
-        }
-    }
-
-    private static void KillOrphanedNodeOnPort(int port, string name)
-    {
-        try
-        {
-            using var check = Process.Start(new ProcessStartInfo("netstat", "-ano")
-            {
-                RedirectStandardOutput = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            });
-            if (check is null) return;
-
-            var output = check.StandardOutput.ReadToEnd();
-            check.WaitForExit();
-
-            foreach (var line in output.Split('\n'))
-            {
-                if (!line.Contains($":{port} ") || !line.Contains("LISTENING"))
-                    continue;
-
-                var parts = line.Split([' '], StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length < 5) continue;
-
-                if (!int.TryParse(parts[^1], out var pid) || pid <= 0) continue;
-
-                try
-                {
-                    using var proc = Process.GetProcessById(pid);
-                    if (!proc.ProcessName.Equals("node", StringComparison.OrdinalIgnoreCase))
-                        continue;
-
-                    HostLog.Warn(
-                        $"Killing orphaned {name} process (PID {pid}) occupying port {port}.");
-                    proc.Kill(entireProcessTree: true);
-                }
-                catch (ArgumentException) { }
-                catch (InvalidOperationException) { }
-            }
-        }
-        catch (Exception ex)
-        {
-            HostLog.Warn($"Failed to scan for orphaned processes on port {port}: {ex.Message}");
         }
     }
 
@@ -787,7 +749,7 @@ internal sealed class RuntimeController : IAsyncDisposable
         try { await _monitorTask; } catch (OperationCanceledException) { }
         await _tunnel.DisposeAsync();
         _http.Dispose();
-        _job.Dispose();
+        _platform.Dispose();
         _lifetime.Dispose();
         _gate.Dispose();
     }

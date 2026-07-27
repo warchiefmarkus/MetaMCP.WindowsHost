@@ -29,8 +29,8 @@ internal sealed class ReleasePackager
         _hostProject = Path.Combine(
             options.ProjectRoot,
             "src",
-            "MetaMCP.Host",
-            "MetaMCP.Host.csproj");
+            "MetaMCP.Host.Windows",
+            "MetaMCP.Host.Windows.csproj");
     }
 
     public async Task RunAsync(CancellationToken cancellationToken = default)
@@ -134,8 +134,11 @@ internal sealed class ReleasePackager
             Console.WriteLine($"Converted {convertedLinks} internal junctions to relative symbolic links.");
             ValidateRelease();
 
-            Heading("Running packaged smoke tests");
-            await SmokeTestAsync(cancellationToken);
+            if (!_options.SkipSmokeTest)
+            {
+                Heading("Running packaged smoke tests");
+                await SmokeTestAsync(cancellationToken);
+            }
 
             Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine();

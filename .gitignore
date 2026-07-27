@@ -2,7 +2,14 @@
 **/obj/
 Release/
 Release-Universal/
+Release-linux-x64/
+Release-linux-arm64/
+Release-Multi/
+Artifacts/
 .host-publish/
+.package-staging/
+.linux-app-staging/
+.node-runtime-cache/
 .host-publish-final/
 .host-publish-test/
 .host-publish-recovery/

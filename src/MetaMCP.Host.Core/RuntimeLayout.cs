@@ -1,13 +1,13 @@
-namespace MetaMCP.Host;
+﻿namespace MetaMCP.Host;
 
 internal sealed class RuntimeLayout
 {
-    public RuntimeLayout(string baseDirectory)
+    public RuntimeLayout(string baseDirectory, string nodeExecutableRelativePath)
     {
         BaseDirectory = Path.GetFullPath(baseDirectory).TrimEnd(Path.DirectorySeparatorChar);
         ConfigDirectory = Path.Combine(BaseDirectory, "config");
         DataDirectory = Path.Combine(BaseDirectory, "data");
-        NodeExecutable = Path.Combine(BaseDirectory, "runtime", "node", "node.exe");
+        NodeExecutable = Path.Combine(BaseDirectory, nodeExecutableRelativePath);
         BackendDirectory = Path.Combine(BaseDirectory, "metamcp", "backend");
         FrontendDirectory = Path.Combine(BaseDirectory, "metamcp", "frontend");
         BackendEntry = Path.Combine(BackendDirectory, "dist", "index.js");

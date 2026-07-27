@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using Microsoft.Win32;
 
 namespace MetaMCP.Host;
@@ -155,7 +155,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private void CreatePortableRuntime()
     {
         _settings = HostSettings.Load(_baseDirectory);
-        _portableRuntime = new RuntimeController(_baseDirectory, _settings);
+        _portableRuntime = new RuntimeController(_baseDirectory, _settings, new WindowsRuntimePlatform());
     }
 
     private void BuildMappingMenu()
@@ -197,7 +197,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             }
             else
             {
-                _portableRuntime ??= new RuntimeController(_baseDirectory, _settings);
+                _portableRuntime ??= new RuntimeController(_baseDirectory, _settings, new WindowsRuntimePlatform());
                 status = await _portableRuntime.SwitchReverseSshMappingAsync(mappingId);
             }
 
@@ -221,7 +221,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             }
             else
             {
-                _portableRuntime ??= new RuntimeController(_baseDirectory, _settings);
+                _portableRuntime ??= new RuntimeController(_baseDirectory, _settings, new WindowsRuntimePlatform());
                 await _portableRuntime.StartAsync();
             }
 
@@ -258,7 +258,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             }
             else
             {
-                _portableRuntime ??= new RuntimeController(_baseDirectory, _settings);
+                _portableRuntime ??= new RuntimeController(_baseDirectory, _settings, new WindowsRuntimePlatform());
                 await _portableRuntime.RestartAsync();
             }
 
@@ -375,7 +375,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             }
             else
             {
-                _portableRuntime ??= new RuntimeController(_baseDirectory, _settings);
+                _portableRuntime ??= new RuntimeController(_baseDirectory, _settings, new WindowsRuntimePlatform());
                 status = await _portableRuntime.RefreshStatusAsync();
             }
 

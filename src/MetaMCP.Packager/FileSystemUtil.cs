@@ -29,6 +29,17 @@ internal static class FileSystemUtil
         CopyDirectoryCore(sourceInfo, new DirectoryInfo(destination));
     }
 
+    public static void CopyDirectoryPreserveLinks(string source, string destination)
+    {
+        var sourceInfo = new DirectoryInfo(source);
+        if (!sourceInfo.Exists)
+        {
+            throw new DirectoryNotFoundException($"Source directory not found: {source}");
+        }
+
+        CopyDirectoryPreserveLinksCore(sourceInfo, new DirectoryInfo(destination));
+    }
+
     public static void CopyFile(string source, string destination)
     {
         if (!File.Exists(source))
@@ -210,6 +221,42 @@ internal static class FileSystemUtil
         var normalized = link.FullName.Replace('/', '\\');
         var marker = Path.Combine("node_modules", ".pnpm", "node_modules", link.Name);
         return normalized.EndsWith(marker, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void CopyDirectoryPreserveLinksCore(
+        DirectoryInfo source,
+        DirectoryInfo destination)
+    {
+        destination.Create();
+        foreach (var entry in source.EnumerateFileSystemInfos())
+        {
+            var targetPath = Path.Combine(destination.FullName, entry.Name);
+            if (entry.Attributes.HasFlag(FileAttributes.ReparsePoint))
+            {
+                var linkTarget = entry.LinkTarget
+                    ?? throw new IOException($"Could not read link target: {entry.FullName}");
+                if (entry is DirectoryInfo)
+                {
+                    Directory.CreateSymbolicLink(targetPath, linkTarget);
+                }
+                else
+                {
+                    File.CreateSymbolicLink(targetPath, linkTarget);
+                }
+                continue;
+            }
+
+            if (entry is FileInfo file)
+            {
+                CopyFile(file.FullName, targetPath);
+            }
+            else if (entry is DirectoryInfo directory)
+            {
+                CopyDirectoryPreserveLinksCore(
+                    directory,
+                    new DirectoryInfo(targetPath));
+            }
+        }
     }
 
     private static void CopyDirectoryCore(DirectoryInfo source, DirectoryInfo destination)
