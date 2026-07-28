@@ -5,6 +5,14 @@ namespace MetaMCP.Host;
 
 internal sealed class TrayApplicationContext : ApplicationContext
 {
+    private sealed record McpConnectionInfo(
+        string ServerName,
+        string ServerType,
+        string Kind,
+        int? ProcessId,
+        string[] SessionIds,
+        int InFlight);
+
     private readonly string _baseDirectory;
     private HostSettings _settings;
     private RuntimeController? _portableRuntime;
@@ -18,7 +26,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _frontendItem;
     private readonly ToolStripMenuItem _databaseItem;
     private readonly ToolStripMenuItem _sshItem;
-    private readonly ToolStripMenuItem _activityHeaderItem;
     private readonly ToolStripMenuItem _sessionsItem;
     private readonly ToolStripMenuItem _activeRequestsItem;
     private readonly ToolStripMenuItem _connectionsItem;
@@ -65,7 +72,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _frontendItem = CreateStatusItem("Frontend: checking...");
         _databaseItem = CreateStatusItem("PostgreSQL: checking...");
         _sshItem = CreateStatusItem("Reverse SSH: checking...");
-        _activityHeaderItem = CreateInformationItem("MCP activity");
         _sessionsItem = CreateStatusItem("Sessions: checking...");
         _activeRequestsItem = CreateStatusItem("Active requests: checking...");
         _connectionsItem = CreateStatusItem("Connections: checking...");
@@ -83,7 +89,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
             _databaseItem,
             _sshItem,
             new ToolStripSeparator(),
-            _activityHeaderItem,
             _sessionsItem,
             _activeRequestsItem,
             _connectionsItem,
@@ -466,6 +471,17 @@ internal sealed class TrayApplicationContext : ApplicationContext
             SetActivityItem(_persistentConnectionsItem, $"Persistent: {persistent}", _greenDot);
             SetActivityItem(_sessionConnectionsItem, $"Session: {active}", _greenDot);
             SetActivityItem(_idleConnectionsItem, $"Idle: {idle}", _greenDot);
+
+            var connections = ReadConnectionDetails(root);
+            UpdateConnectionMenu(
+                _persistentConnectionsItem,
+                connections.Where(connection => connection.Kind == "PERSISTENT"));
+            UpdateConnectionMenu(
+                _sessionConnectionsItem,
+                connections.Where(connection => connection.Kind == "SESSION"));
+            UpdateConnectionMenu(
+                _idleConnectionsItem,
+                connections.Where(connection => connection.Kind == "IDLE"));
         }
         catch
         {
@@ -477,6 +493,102 @@ internal sealed class TrayApplicationContext : ApplicationContext
         element.TryGetProperty(propertyName, out var value) && value.TryGetInt32(out var result)
             ? result
             : 0;
+
+    private static IReadOnlyList<McpConnectionInfo> ReadConnectionDetails(
+        System.Text.Json.JsonElement root)
+    {
+        var result = new List<McpConnectionInfo>();
+        if (!root.TryGetProperty("mcpConnections", out var connections) ||
+            connections.ValueKind != System.Text.Json.JsonValueKind.Array)
+        {
+            return result;
+        }
+
+        foreach (var connection in connections.EnumerateArray())
+        {
+            var serverName = ReadString(connection, "serverName") ?? "Unknown MCP";
+            var serverType = ReadString(connection, "serverType") ?? "UNKNOWN";
+            var kind = ReadString(connection, "kind") ?? "UNKNOWN";
+            var processId = connection.TryGetProperty("processId", out var processIdValue) &&
+                processIdValue.TryGetInt32(out var pid)
+                    ? pid
+                    : (int?)null;
+            var sessionIds = connection.TryGetProperty("sessionIds", out var sessions) &&
+                sessions.ValueKind == System.Text.Json.JsonValueKind.Array
+                    ? sessions.EnumerateArray()
+                        .Where(value => value.ValueKind == System.Text.Json.JsonValueKind.String)
+                        .Select(value => value.GetString()!)
+                        .ToArray()
+                    : [];
+
+            result.Add(new McpConnectionInfo(
+                serverName,
+                serverType,
+                kind,
+                processId,
+                sessionIds,
+                ReadInt(connection, "inFlight")));
+        }
+
+        return result;
+    }
+
+    private static string? ReadString(
+        System.Text.Json.JsonElement element,
+        string propertyName) =>
+        element.TryGetProperty(propertyName, out var value) &&
+        value.ValueKind == System.Text.Json.JsonValueKind.String
+            ? value.GetString()
+            : null;
+
+    private static void UpdateConnectionMenu(
+        ToolStripMenuItem parent,
+        IEnumerable<McpConnectionInfo> connections)
+    {
+        parent.DropDownItems.Clear();
+        var items = connections.ToArray();
+        if (items.Length == 0)
+        {
+            parent.DropDownItems.Add(new ToolStripMenuItem("No connections")
+            {
+                Enabled = false,
+            });
+            return;
+        }
+
+        foreach (var connection in items)
+        {
+            var process = connection.ProcessId is int pid
+                ? $"PID: {pid}"
+                : connection.ServerType;
+            var session = connection.Kind == "SESSION" && connection.SessionIds.Length > 0
+                ? $" | session: {ShortSessionId(connection.SessionIds[0])}"
+                : connection.Kind == "PERSISTENT" && connection.SessionIds.Length > 0
+                    ? $" | sessions: {connection.SessionIds.Length}"
+                    : string.Empty;
+            var inFlight = connection.InFlight > 0
+                ? $" | active: {connection.InFlight}"
+                : string.Empty;
+
+            parent.DropDownItems.Add(new ToolStripMenuItem(
+                $"{connection.ServerName} | {process}{session}{inFlight}")
+            {
+                Enabled = false,
+            });
+        }
+    }
+
+    private static string ShortSessionId(string sessionId) =>
+        sessionId.Length <= 8 ? sessionId : sessionId[..8];
+
+    private static void SetConnectionMenuUnavailable(ToolStripMenuItem parent)
+    {
+        parent.DropDownItems.Clear();
+        parent.DropDownItems.Add(new ToolStripMenuItem("Unavailable")
+        {
+            Enabled = false,
+        });
+    }
 
     private static void SetActivityItem(
         ToolStripMenuItem item,
@@ -495,6 +607,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
         SetActivityItem(_persistentConnectionsItem, "Persistent: unavailable", _grayDot);
         SetActivityItem(_sessionConnectionsItem, "Session: unavailable", _grayDot);
         SetActivityItem(_idleConnectionsItem, "Idle: unavailable", _grayDot);
+        SetConnectionMenuUnavailable(_persistentConnectionsItem);
+        SetConnectionMenuUnavailable(_sessionConnectionsItem);
+        SetConnectionMenuUnavailable(_idleConnectionsItem);
     }
 
     private void UpdateStatusMenu(RuntimeStatus status)
