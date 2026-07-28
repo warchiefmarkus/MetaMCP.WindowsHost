@@ -18,7 +18,13 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _frontendItem;
     private readonly ToolStripMenuItem _databaseItem;
     private readonly ToolStripMenuItem _sshItem;
+    private readonly ToolStripMenuItem _activityHeaderItem;
+    private readonly ToolStripMenuItem _sessionsItem;
+    private readonly ToolStripMenuItem _activeRequestsItem;
     private readonly ToolStripMenuItem _connectionsItem;
+    private readonly ToolStripMenuItem _persistentConnectionsItem;
+    private readonly ToolStripMenuItem _sessionConnectionsItem;
+    private readonly ToolStripMenuItem _idleConnectionsItem;
     private readonly ToolStripMenuItem _mappingItem;
     private readonly Dictionary<string, ToolStripMenuItem> _mappingItems =
         new(StringComparer.OrdinalIgnoreCase);
@@ -59,7 +65,13 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _frontendItem = CreateStatusItem("Frontend: checking...");
         _databaseItem = CreateStatusItem("PostgreSQL: checking...");
         _sshItem = CreateStatusItem("Reverse SSH: checking...");
-        _connectionsItem = CreateStatusItem("Sessions / connections: checking...");
+        _activityHeaderItem = CreateInformationItem("MCP activity");
+        _sessionsItem = CreateStatusItem("Sessions: checking...");
+        _activeRequestsItem = CreateStatusItem("Active requests: checking...");
+        _connectionsItem = CreateStatusItem("Connections: checking...");
+        _persistentConnectionsItem = CreateStatusItem("Persistent: checking...");
+        _sessionConnectionsItem = CreateStatusItem("Session: checking...");
+        _idleConnectionsItem = CreateStatusItem("Idle: checking...");
         _mappingItem = new ToolStripMenuItem("Reverse SSH mapping");
         BuildMappingMenu();
         _menu.Items.AddRange([
@@ -70,7 +82,14 @@ internal sealed class TrayApplicationContext : ApplicationContext
             _frontendItem,
             _databaseItem,
             _sshItem,
+            new ToolStripSeparator(),
+            _activityHeaderItem,
+            _sessionsItem,
+            _activeRequestsItem,
             _connectionsItem,
+            _persistentConnectionsItem,
+            _sessionConnectionsItem,
+            _idleConnectionsItem,
             new ToolStripSeparator(),
             _mappingItem,
             new ToolStripSeparator(),
@@ -441,11 +460,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 idle = ReadInt(pool, "idle");
             }
 
-            _connectionsItem.Text =
-                $"Sessions: {sessions} ({activeRequests} requests) | " +
-                $"Connections: {totalConnections} " +
-                $"[persistent {persistent}, session {active}, idle {idle}]";
-            _connectionsItem.Image = _greenDot;
+            SetActivityItem(_sessionsItem, $"Sessions: {sessions}", _greenDot);
+            SetActivityItem(_activeRequestsItem, $"Active requests: {activeRequests}", _greenDot);
+            SetActivityItem(_connectionsItem, $"Connections: {totalConnections}", _greenDot);
+            SetActivityItem(_persistentConnectionsItem, $"Persistent: {persistent}", _greenDot);
+            SetActivityItem(_sessionConnectionsItem, $"Session: {active}", _greenDot);
+            SetActivityItem(_idleConnectionsItem, $"Idle: {idle}", _greenDot);
         }
         catch
         {
@@ -458,10 +478,23 @@ internal sealed class TrayApplicationContext : ApplicationContext
             ? result
             : 0;
 
+    private static void SetActivityItem(
+        ToolStripMenuItem item,
+        string text,
+        Image image)
+    {
+        item.Text = text;
+        item.Image = image;
+    }
+
     private void SetConnectionCountsUnavailable()
     {
-        _connectionsItem.Text = "Sessions / connections: unavailable";
-        _connectionsItem.Image = _grayDot;
+        SetActivityItem(_sessionsItem, "Sessions: unavailable", _grayDot);
+        SetActivityItem(_activeRequestsItem, "Active requests: unavailable", _grayDot);
+        SetActivityItem(_connectionsItem, "Connections: unavailable", _grayDot);
+        SetActivityItem(_persistentConnectionsItem, "Persistent: unavailable", _grayDot);
+        SetActivityItem(_sessionConnectionsItem, "Session: unavailable", _grayDot);
+        SetActivityItem(_idleConnectionsItem, "Idle: unavailable", _grayDot);
     }
 
     private void UpdateStatusMenu(RuntimeStatus status)

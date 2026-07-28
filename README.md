@@ -98,7 +98,7 @@ Tray дозволяє:
 - запускати, зупиняти й перезапускати runtime;
 - встановлювати або видаляти Windows Service;
 - перемикати активний reverse SSH mapping без restart frontend/backend;
-- показувати під Reverse SSH кількість зовнішніх MCP-сесій, активних запитів і реальних MCP-з'єднань з розбивкою `persistent/session/idle`;
+- показувати в окремому блоці під Reverse SSH компактні рядки `Sessions`, `Active requests`, `Connections`, `Persistent`, `Session` та `Idle`;
 - відкривати конфіг і локальний UI.
 У portable mode дочірні Node-процеси входять у Windows Job Object.
 У service mode runtime належить службі, а tray працює як локальний клієнт через named pipe.
