@@ -18,6 +18,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _frontendItem;
     private readonly ToolStripMenuItem _databaseItem;
     private readonly ToolStripMenuItem _sshItem;
+    private readonly ToolStripMenuItem _connectionsItem;
     private readonly ToolStripMenuItem _mappingItem;
     private readonly Dictionary<string, ToolStripMenuItem> _mappingItems =
         new(StringComparer.OrdinalIgnoreCase);
@@ -29,6 +30,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _openMetaMcpItem;
     private readonly ToolStripMenuItem _openConfigItem;
     private readonly System.Windows.Forms.Timer _timer;
+    private readonly HttpClient _metricsHttp = new() { Timeout = Timeout.InfiniteTimeSpan };
     private readonly Image _greenDot = CreateDot(Color.LimeGreen);
     private readonly Image _yellowDot = CreateDot(Color.Goldenrod);
     private readonly Image _redDot = CreateDot(Color.Crimson);
@@ -57,6 +59,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _frontendItem = CreateStatusItem("Frontend: checking...");
         _databaseItem = CreateStatusItem("PostgreSQL: checking...");
         _sshItem = CreateStatusItem("Reverse SSH: checking...");
+        _connectionsItem = CreateStatusItem("Sessions / connections: checking...");
         _mappingItem = new ToolStripMenuItem("Reverse SSH mapping");
         BuildMappingMenu();
         _menu.Items.AddRange([
@@ -67,6 +70,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             _frontendItem,
             _databaseItem,
             _sshItem,
+            _connectionsItem,
             new ToolStripSeparator(),
             _mappingItem,
             new ToolStripSeparator(),
@@ -380,6 +384,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             }
 
             UpdateStatusMenu(status);
+            await RefreshConnectionCountsAsync(status.Backend == ComponentState.Online);
         }
         catch (Exception ex)
         {
@@ -397,7 +402,66 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 null,
                 serviceError,
                 DateTimeOffset.Now));
+            SetConnectionCountsUnavailable();
         }
+    }
+
+    private async Task RefreshConnectionCountsAsync(bool backendOnline)
+    {
+        if (!backendOnline)
+        {
+            SetConnectionCountsUnavailable();
+            return;
+        }
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(
+            Math.Clamp(_settings.HealthCheckTimeoutMilliseconds, 500, 5000)));
+        try
+        {
+            using var response = await _metricsHttp.GetAsync(
+                $"http://127.0.0.1:{_settings.BackendPort}/metamcp/health/sessions",
+                timeout.Token);
+            response.EnsureSuccessStatusCode();
+            await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token);
+            using var document = await System.Text.Json.JsonDocument.ParseAsync(
+                stream,
+                cancellationToken: timeout.Token);
+            var root = document.RootElement;
+            var sessions = ReadInt(root, "totalActiveSessions");
+            var activeRequests = ReadInt(root, "activeSessionRequests");
+            var totalConnections = ReadInt(root, "totalMcpConnections");
+
+            var active = 0;
+            var persistent = 0;
+            var idle = 0;
+            if (root.TryGetProperty("mcpServerPoolStatus", out var pool))
+            {
+                active = ReadInt(pool, "active");
+                persistent = ReadInt(pool, "persistent");
+                idle = ReadInt(pool, "idle");
+            }
+
+            _connectionsItem.Text =
+                $"Sessions: {sessions} ({activeRequests} requests) | " +
+                $"Connections: {totalConnections} " +
+                $"[persistent {persistent}, session {active}, idle {idle}]";
+            _connectionsItem.Image = _greenDot;
+        }
+        catch
+        {
+            SetConnectionCountsUnavailable();
+        }
+    }
+
+    private static int ReadInt(System.Text.Json.JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out var value) && value.TryGetInt32(out var result)
+            ? result
+            : 0;
+
+    private void SetConnectionCountsUnavailable()
+    {
+        _connectionsItem.Text = "Sessions / connections: unavailable";
+        _connectionsItem.Image = _grayDot;
     }
 
     private void UpdateStatusMenu(RuntimeStatus status)
@@ -568,6 +632,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             SystemEvents.UserPreferenceChanged -= OnSystemThemeChanged;
             _notifyIcon.Visible = false;
             _timer.Dispose();
+            _metricsHttp.Dispose();
             _notifyIcon.Dispose();
             _menu.Dispose();
             _applicationIcon.Dispose();
