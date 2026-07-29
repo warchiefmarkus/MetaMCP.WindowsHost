@@ -13,6 +13,10 @@ internal sealed class TrayApplicationContext : ApplicationContext
         string[] SessionIds,
         int InFlight);
 
+    private sealed record McpSessionInfo(
+        string SessionId,
+        int ActiveRequests);
+
     private readonly string _baseDirectory;
     private HostSettings _settings;
     private RuntimeController? _portableRuntime;
@@ -27,11 +31,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _databaseItem;
     private readonly ToolStripMenuItem _sshItem;
     private readonly ToolStripMenuItem _sessionsItem;
-    private readonly ToolStripMenuItem _activeRequestsItem;
-    private readonly ToolStripMenuItem _connectionsItem;
-    private readonly ToolStripMenuItem _persistentConnectionsItem;
-    private readonly ToolStripMenuItem _sessionConnectionsItem;
-    private readonly ToolStripMenuItem _idleConnectionsItem;
     private readonly ToolStripMenuItem _mappingItem;
     private readonly Dictionary<string, ToolStripMenuItem> _mappingItems =
         new(StringComparer.OrdinalIgnoreCase);
@@ -73,11 +72,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _databaseItem = CreateStatusItem("PostgreSQL: checking...");
         _sshItem = CreateStatusItem("Reverse SSH: checking...");
         _sessionsItem = CreateStatusItem("Sessions: checking...");
-        _activeRequestsItem = CreateStatusItem("Active requests: checking...");
-        _connectionsItem = CreateStatusItem("Connections: checking...");
-        _persistentConnectionsItem = CreateStatusItem("Persistent: checking...");
-        _sessionConnectionsItem = CreateStatusItem("Session: checking...");
-        _idleConnectionsItem = CreateStatusItem("Idle: checking...");
         _mappingItem = new ToolStripMenuItem("Reverse SSH mapping");
         BuildMappingMenu();
         _menu.Items.AddRange([
@@ -90,11 +84,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
             _sshItem,
             new ToolStripSeparator(),
             _sessionsItem,
-            _activeRequestsItem,
-            _connectionsItem,
-            _persistentConnectionsItem,
-            _sessionConnectionsItem,
-            _idleConnectionsItem,
             new ToolStripSeparator(),
             _mappingItem,
             new ToolStripSeparator(),
@@ -451,37 +440,10 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 stream,
                 cancellationToken: timeout.Token);
             var root = document.RootElement;
-            var sessions = ReadInt(root, "totalActiveSessions");
-            var activeRequests = ReadInt(root, "activeSessionRequests");
-            var totalConnections = ReadInt(root, "totalMcpConnections");
 
-            var active = 0;
-            var persistent = 0;
-            var idle = 0;
-            if (root.TryGetProperty("mcpServerPoolStatus", out var pool))
-            {
-                active = ReadInt(pool, "active");
-                persistent = ReadInt(pool, "persistent");
-                idle = ReadInt(pool, "idle");
-            }
-
-            SetActivityItem(_sessionsItem, $"Sessions: {sessions}", _greenDot);
-            SetActivityItem(_activeRequestsItem, $"Active requests: {activeRequests}", _greenDot);
-            SetActivityItem(_connectionsItem, $"Connections: {totalConnections}", _greenDot);
-            SetActivityItem(_persistentConnectionsItem, $"Persistent: {persistent}", _greenDot);
-            SetActivityItem(_sessionConnectionsItem, $"Session: {active}", _greenDot);
-            SetActivityItem(_idleConnectionsItem, $"Idle: {idle}", _greenDot);
-
-            var connections = ReadConnectionDetails(root);
-            UpdateConnectionMenu(
-                _persistentConnectionsItem,
-                connections.Where(connection => connection.Kind == "PERSISTENT"));
-            UpdateConnectionMenu(
-                _sessionConnectionsItem,
-                connections.Where(connection => connection.Kind == "SESSION"));
-            UpdateConnectionMenu(
-                _idleConnectionsItem,
-                connections.Where(connection => connection.Kind == "IDLE"));
+            UpdateSessionsTree(
+                ReadSessionDetails(root),
+                ReadConnectionDetails(root));
         }
         catch
         {
@@ -493,6 +455,47 @@ internal sealed class TrayApplicationContext : ApplicationContext
         element.TryGetProperty(propertyName, out var value) && value.TryGetInt32(out var result)
             ? result
             : 0;
+
+    private static IReadOnlyList<McpSessionInfo> ReadSessionDetails(
+        System.Text.Json.JsonElement root)
+    {
+        var result = new List<McpSessionInfo>();
+        if (!root.TryGetProperty("streamableHttpSessions", out var container))
+        {
+            return result;
+        }
+
+        if (container.TryGetProperty("sessions", out var sessions) &&
+            sessions.ValueKind == System.Text.Json.JsonValueKind.Array)
+        {
+            foreach (var session in sessions.EnumerateArray())
+            {
+                var sessionId = ReadString(session, "sessionId");
+                if (!string.IsNullOrWhiteSpace(sessionId))
+                {
+                    result.Add(new McpSessionInfo(
+                        sessionId,
+                        ReadInt(session, "activeRequests")));
+                }
+            }
+            return result;
+        }
+
+        if (container.TryGetProperty("sessionIds", out var sessionIds) &&
+            sessionIds.ValueKind == System.Text.Json.JsonValueKind.Array)
+        {
+            foreach (var sessionId in sessionIds.EnumerateArray())
+            {
+                if (sessionId.ValueKind == System.Text.Json.JsonValueKind.String &&
+                    sessionId.GetString() is { Length: > 0 } value)
+                {
+                    result.Add(new McpSessionInfo(value, 0));
+                }
+            }
+        }
+
+        return result;
+    }
 
     private static IReadOnlyList<McpConnectionInfo> ReadConnectionDetails(
         System.Text.Json.JsonElement root)
@@ -541,54 +544,133 @@ internal sealed class TrayApplicationContext : ApplicationContext
             ? value.GetString()
             : null;
 
-    private static void UpdateConnectionMenu(
-        ToolStripMenuItem parent,
-        IEnumerable<McpConnectionInfo> connections)
+    private void UpdateSessionsTree(
+        IReadOnlyList<McpSessionInfo> sessions,
+        IReadOnlyList<McpConnectionInfo> connections)
     {
-        parent.DropDownItems.Clear();
-        var items = connections.ToArray();
-        if (items.Length == 0)
+        SetActivityItem(_sessionsItem, $"Sessions: {sessions.Count}", _greenDot);
+        _sessionsItem.DropDownItems.Clear();
+
+        foreach (var session in sessions.OrderBy(item => item.SessionId))
         {
-            parent.DropDownItems.Add(new ToolStripMenuItem("No connections")
-            {
-                Enabled = false,
-            });
+            var requestSuffix = session.ActiveRequests > 0
+                ? $" | active requests: {session.ActiveRequests}"
+                : string.Empty;
+            var sessionItem = new ToolStripMenuItem(
+                $"Session: {ShortSessionId(session.SessionId)}{requestSuffix}");
+            var linkedConnections = connections
+                .Where(connection => connection.SessionIds.Contains(
+                    session.SessionId,
+                    StringComparer.Ordinal))
+                .ToArray();
+
+            AddConnectionGroups(sessionItem, linkedConnections);
+            _sessionsItem.DropDownItems.Add(sessionItem);
+        }
+
+        if (sessions.Count == 0)
+        {
+            _sessionsItem.DropDownItems.Add(CreateDisabledMenuItem("No active sessions"));
+        }
+
+        var activeSessionIds = sessions
+            .Select(session => session.SessionId)
+            .ToHashSet(StringComparer.Ordinal);
+        var unattachedConnections = connections
+            .Where(connection =>
+                connection.SessionIds.Length == 0 ||
+                !connection.SessionIds.Any(activeSessionIds.Contains))
+            .ToArray();
+        if (unattachedConnections.Length > 0)
+        {
+            _sessionsItem.DropDownItems.Add(new ToolStripSeparator());
+            var unattachedItem = new ToolStripMenuItem(
+                $"Connections without active session: {unattachedConnections.Length}");
+            AddConnectionGroups(unattachedItem, unattachedConnections, groupByKind: true);
+            _sessionsItem.DropDownItems.Add(unattachedItem);
+        }
+    }
+
+    private static void AddConnectionGroups(
+        ToolStripMenuItem parent,
+        IReadOnlyList<McpConnectionInfo> connections,
+        bool groupByKind = false)
+    {
+        if (connections.Count == 0)
+        {
+            parent.DropDownItems.Add(CreateDisabledMenuItem("No MCP connections"));
             return;
         }
 
-        foreach (var connection in items)
+        if (groupByKind)
         {
-            var process = connection.ProcessId is int pid
-                ? $"PID: {pid}"
-                : connection.ServerType;
-            var session = connection.Kind == "SESSION" && connection.SessionIds.Length > 0
-                ? $" | session: {ShortSessionId(connection.SessionIds[0])}"
-                : connection.Kind == "PERSISTENT" && connection.SessionIds.Length > 0
-                    ? $" | sessions: {connection.SessionIds.Length}"
-                    : string.Empty;
-            var inFlight = connection.InFlight > 0
-                ? $" | active: {connection.InFlight}"
-                : string.Empty;
-
-            parent.DropDownItems.Add(new ToolStripMenuItem(
-                $"{connection.ServerName} | {process}{session}{inFlight}")
+            foreach (var kindGroup in connections
+                .GroupBy(connection => connection.Kind)
+                .OrderBy(group => group.Key))
             {
-                Enabled = false,
-            });
+                var kindItem = new ToolStripMenuItem(
+                    $"{FormatConnectionKind(kindGroup.Key)}: {kindGroup.Count()}");
+                AddServerGroups(kindItem, kindGroup.ToArray());
+                parent.DropDownItems.Add(kindItem);
+            }
+            return;
+        }
+
+        AddServerGroups(parent, connections);
+    }
+
+    private static void AddServerGroups(
+        ToolStripMenuItem parent,
+        IReadOnlyList<McpConnectionInfo> connections)
+    {
+        foreach (var serverGroup in connections
+            .GroupBy(connection => new
+            {
+                connection.ServerName,
+                connection.ServerType,
+                connection.Kind,
+            })
+            .OrderBy(group => group.Key.ServerName))
+        {
+            var shared = serverGroup.Key.Kind == "PERSISTENT"
+                ? " | shared"
+                : string.Empty;
+            var serverItem = new ToolStripMenuItem(
+                $"{serverGroup.Key.ServerName} [{FormatConnectionKind(serverGroup.Key.Kind)}]{shared}");
+
+            foreach (var connection in serverGroup.OrderBy(item => item.ProcessId ?? int.MaxValue))
+            {
+                var processText = connection.ProcessId is int pid
+                    ? $"PID: {pid}"
+                    : $"Transport: {connection.ServerType}";
+                var active = connection.InFlight > 0
+                    ? $" | active requests: {connection.InFlight}"
+                    : string.Empty;
+                serverItem.DropDownItems.Add(CreateDisabledMenuItem(
+                    $"{processText}{active}"));
+            }
+
+            parent.DropDownItems.Add(serverItem);
         }
     }
+
+    private static string FormatConnectionKind(string kind) =>
+        kind switch
+        {
+            "PERSISTENT" => "persistent",
+            "SESSION" => "session",
+            "IDLE" => "idle",
+            _ => kind.ToLowerInvariant(),
+        };
 
     private static string ShortSessionId(string sessionId) =>
         sessionId.Length <= 8 ? sessionId : sessionId[..8];
 
-    private static void SetConnectionMenuUnavailable(ToolStripMenuItem parent)
-    {
-        parent.DropDownItems.Clear();
-        parent.DropDownItems.Add(new ToolStripMenuItem("Unavailable")
+    private static ToolStripMenuItem CreateDisabledMenuItem(string text) =>
+        new(text)
         {
             Enabled = false,
-        });
-    }
+        };
 
     private static void SetActivityItem(
         ToolStripMenuItem item,
@@ -602,14 +684,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private void SetConnectionCountsUnavailable()
     {
         SetActivityItem(_sessionsItem, "Sessions: unavailable", _grayDot);
-        SetActivityItem(_activeRequestsItem, "Active requests: unavailable", _grayDot);
-        SetActivityItem(_connectionsItem, "Connections: unavailable", _grayDot);
-        SetActivityItem(_persistentConnectionsItem, "Persistent: unavailable", _grayDot);
-        SetActivityItem(_sessionConnectionsItem, "Session: unavailable", _grayDot);
-        SetActivityItem(_idleConnectionsItem, "Idle: unavailable", _grayDot);
-        SetConnectionMenuUnavailable(_persistentConnectionsItem);
-        SetConnectionMenuUnavailable(_sessionConnectionsItem);
-        SetConnectionMenuUnavailable(_idleConnectionsItem);
+        _sessionsItem.DropDownItems.Clear();
+        _sessionsItem.DropDownItems.Add(CreateDisabledMenuItem("Unavailable"));
     }
 
     private void UpdateStatusMenu(RuntimeStatus status)
