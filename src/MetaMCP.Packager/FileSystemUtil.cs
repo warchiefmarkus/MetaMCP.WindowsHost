@@ -174,6 +174,12 @@ internal static class FileSystemUtil
         return nonPortable;
     }
 
+    public static IReadOnlyList<string> GetReparsePoints(string root) =>
+        EnumerateReparsePoints(root)
+            .Select(info => info.FullName)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
     private static IReadOnlyList<FileSystemInfo> EnumerateReparsePoints(string root)
     {
         var links = new List<FileSystemInfo>();

@@ -67,6 +67,8 @@ Release/
 
 Окремі target-и пишуть у відповідний підкаталог. `--target all` використовує корінь `Release`.
 
+Windows package містить фізичний `node_modules` без junction/symbolic links, тому його можна переносити звичайним копіюванням або архівом. Packager окремо перевіряє наявність `pg`, `pg-types`, PostgreSQL parser dependencies і запуск database runtime modules.
+
 Для повторної збірки можна додати `--skip-install`.
 `--target all` виконує production build MetaMCP один раз і створює всі три пакети.
 ## VS Code tasks

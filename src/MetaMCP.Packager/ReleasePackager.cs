@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace MetaMCP.Packager;
 
@@ -10,6 +11,7 @@ internal sealed class ReleasePackager
 {
     private readonly CommandLineOptions _options;
     private readonly string _pnpm;
+    private readonly string _npm;
     private readonly string _node;
     private readonly string _dotnet;
     private readonly string _assetsDirectory;
@@ -19,6 +21,7 @@ internal sealed class ReleasePackager
     {
         _options = options;
         _pnpm = ProcessRunner.FindExecutable("pnpm.cmd", "pnpm.exe");
+        _npm = ProcessRunner.FindExecutable("npm.cmd", "npm.exe");
         _node = ProcessRunner.FindExecutable("node.exe");
         _dotnet = ProcessRunner.FindExecutable("dotnet.exe");
         _assetsDirectory = Path.Combine(
@@ -94,6 +97,9 @@ internal sealed class ReleasePackager
                 ["--filter", "backend", "--prod", "deploy", backendDestination],
                 null,
                 cancellationToken);
+            await MaterializePortableNodeModulesAsync(
+                backendDestination,
+                cancellationToken);
             CopyWorkspaceRuntime(backendDestination);
             var backendScripts = Path.Combine(backendDestination, "scripts");
             Directory.CreateDirectory(backendScripts);
@@ -108,6 +114,9 @@ internal sealed class ReleasePackager
                 null,
                 cancellationToken);
             OverlayNextStandalone(frontendDestination);
+            await MaterializePortableNodeModulesAsync(
+                frontendDestination,
+                cancellationToken);
             CopyWorkspaceRuntime(frontendDestination);
 
             Heading("Packaging Node.js runtime");
@@ -129,9 +138,8 @@ internal sealed class ReleasePackager
 
             await WriteManifestAsync(cancellationToken);
 
-            Heading("Making release links portable");
-            var convertedLinks = FileSystemUtil.MakeReparsePointsPortable(_options.Output);
-            Console.WriteLine($"Converted {convertedLinks} internal junctions to relative symbolic links.");
+            Heading("Validating portable release layout");
+            ValidateNoReparsePoints();
             ValidateRelease();
 
             if (!_options.SkipSmokeTest)
@@ -165,6 +173,79 @@ internal sealed class ReleasePackager
             _options.Repository,
             environment,
             cancellationToken: cancellationToken);
+    }
+
+    private async Task MaterializePortableNodeModulesAsync(
+        string packageDestination,
+        CancellationToken cancellationToken)
+    {
+        var packageJsonPath = Path.Combine(packageDestination, "package.json");
+        var package = JsonNode.Parse(File.ReadAllText(packageJsonPath))?.AsObject()
+            ?? throw new InvalidDataException($"Invalid package.json: {packageJsonPath}");
+        var dependencies = package["dependencies"]?.AsObject()
+            ?? throw new InvalidDataException($"Dependencies are missing: {packageJsonPath}");
+        var exactDependencies = new JsonObject();
+
+        foreach (var dependency in dependencies)
+        {
+            if (dependency.Key.StartsWith("@repo/", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var dependencyManifest = Path.Combine(
+                packageDestination,
+                "node_modules",
+                dependency.Key,
+                "package.json");
+            if (!File.Exists(dependencyManifest))
+            {
+                throw new FileNotFoundException(
+                    $"Resolved dependency is missing: {dependency.Key}",
+                    dependencyManifest);
+            }
+
+            var resolvedPackage = JsonNode.Parse(File.ReadAllText(dependencyManifest))?.AsObject();
+            var version = resolvedPackage?["version"]?.GetValue<string>();
+            if (string.IsNullOrWhiteSpace(version))
+            {
+                throw new InvalidDataException(
+                    $"Resolved dependency has no version: {dependencyManifest}");
+            }
+            exactDependencies[dependency.Key] = version;
+        }
+
+        package["dependencies"] = exactDependencies;
+        package.Remove("devDependencies");
+        File.WriteAllText(
+            packageJsonPath,
+            package.ToJsonString(new JsonSerializerOptions { WriteIndented = true }),
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+
+        var nodeModules = Path.Combine(packageDestination, "node_modules");
+        FileSystemUtil.DeleteDirectory(nodeModules);
+        await ProcessRunner.RunAsync(
+            _npm,
+            [
+                "install",
+                "--omit=dev",
+                "--install-strategy=hoisted",
+                "--ignore-scripts",
+                "--no-package-lock",
+                "--no-audit",
+                "--no-fund",
+                "--legacy-peer-deps",
+            ],
+            packageDestination,
+            cancellationToken: cancellationToken);
+
+        var links = FileSystemUtil.GetReparsePoints(nodeModules);
+        if (links.Count > 0)
+        {
+            throw new InvalidOperationException(
+                "Portable node_modules contains filesystem links:\n"
+                + string.Join('\n', links.Take(20)));
+        }
     }
 
     private void OverlayNextStandalone(string frontendDestination)
@@ -214,23 +295,22 @@ internal sealed class ReleasePackager
 
     private void CopyWorkspaceRuntime(string packageDestination)
     {
-        var packages = new[]
+        foreach (var packageName in new[] { "zod-types", "trpc" })
         {
-            (Source: Path.Combine(_options.Repository, "packages", "zod-types", "dist"),
-             Target: Path.Combine(packageDestination, "node_modules", "@repo", "zod-types", "dist")),
-            (Source: Path.Combine(_options.Repository, "packages", "trpc", "dist"),
-             Target: Path.Combine(packageDestination, "node_modules", "@repo", "trpc", "dist")),
-        };
-
-        foreach (var package in packages)
-        {
-            var entryPoint = Path.Combine(package.Target, "index.js");
-            if (!File.Exists(entryPoint))
-            {
-                FileSystemUtil.CopyDirectory(package.Source, package.Target);
-            }
-
-            FileSystemUtil.RequireFile(entryPoint);
+            var source = Path.Combine(_options.Repository, "packages", packageName);
+            var target = Path.Combine(
+                packageDestination,
+                "node_modules",
+                "@repo",
+                packageName);
+            FileSystemUtil.RecreateDirectory(target);
+            FileSystemUtil.CopyFile(
+                Path.Combine(source, "package.json"),
+                Path.Combine(target, "package.json"));
+            FileSystemUtil.CopyDirectory(
+                Path.Combine(source, "dist"),
+                Path.Combine(target, "dist"));
+            FileSystemUtil.RequireFile(Path.Combine(target, "dist", "index.js"));
         }
     }
 
@@ -305,6 +385,12 @@ internal sealed class ReleasePackager
             _options.Repository,
             throwOnFailure: false,
             cancellationToken: cancellationToken);
+        var npmVersion = await ProcessRunner.RunAsync(
+            _npm,
+            ["--version"],
+            _options.Repository,
+            throwOnFailure: false,
+            cancellationToken: cancellationToken);
 
         string? gitCommit = null;
         try
@@ -329,12 +415,24 @@ internal sealed class ReleasePackager
             gitCommit,
             nodeVersion = nodeVersion.Output.Trim(),
             pnpmVersion = pnpmVersion.Output.Trim(),
+            npmVersion = npmVersion.Output.Trim(),
             frontendPort = 12008,
             backendPort = 12009,
         };
         File.WriteAllText(
             Path.Combine(_options.Output, "build-manifest.json"),
             JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    private void ValidateNoReparsePoints()
+    {
+        var links = FileSystemUtil.GetReparsePoints(_options.Output);
+        if (links.Count > 0)
+        {
+            throw new InvalidOperationException(
+                "The Windows release must not contain filesystem links:\n"
+                + string.Join('\n', links.Take(20)));
+        }
     }
 
     private void ValidateRelease()
@@ -346,6 +444,9 @@ internal sealed class ReleasePackager
             Path.Combine(_options.Output, "runtime", "node", "npx.cmd"),
             Path.Combine(_options.Output, "metamcp", "backend", "dist", "index.js"),
             Path.Combine(_options.Output, "metamcp", "backend", "scripts", "migrate.mjs"),
+            Path.Combine(_options.Output, "metamcp", "backend", "node_modules", "pg", "package.json"),
+            Path.Combine(_options.Output, "metamcp", "backend", "node_modules", "pg-types", "package.json"),
+            Path.Combine(_options.Output, "metamcp", "backend", "node_modules", "postgres-array", "package.json"),
             Path.Combine(_options.Output, "metamcp", "frontend", "server.js"),
             Path.Combine(_options.Output, "metamcp", "frontend", "node_modules", "react-hook-form", "package.json"),
             Path.Combine(_options.Output, "config", ".env.local"),
@@ -412,6 +513,20 @@ internal sealed class ReleasePackager
             ["HOSTNAME"] = "127.0.0.1",
             ["PORT"] = frontendPort.ToString(),
         };
+
+        var backendDirectory = Path.Combine(_options.Output, "metamcp", "backend");
+        await ProcessRunner.RunAsync(
+            node,
+            [
+                "--input-type=module",
+                "-e",
+                "await import('pg'); await import('pg-types'); "
+                + "await import('postgres-array'); "
+                + "await import('drizzle-orm/node-postgres'); "
+                + "console.log('Database runtime modules loaded.');",
+            ],
+            backendDirectory,
+            cancellationToken: cancellationToken);
 
         Process? backend = null;
         Process? frontend = null;
