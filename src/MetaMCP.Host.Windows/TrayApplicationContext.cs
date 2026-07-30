@@ -553,10 +553,10 @@ internal sealed class TrayApplicationContext : ApplicationContext
             $"MCP: {sessions.Count} sessions | {connections.Count} connections",
             sessions.Count > 0 || connections.Count > 0 ? _greenDot : _grayDot);
         _sessionsItem.DropDownItems.Clear();
-        _sessionsItem.DropDownItems.Add(CreateConnectionsByModeItem(connections));
+        _sessionsItem.DropDownItems.Add(CreateMcpConnectionsItem(connections));
 
         var activeSessionsItem = new ToolStripMenuItem(
-            $"Active sessions: {sessions.Count}");
+            $"Client sessions: {sessions.Count}");
         var sessionEntries = sessions
             .Select(session => new
             {
@@ -632,10 +632,11 @@ internal sealed class TrayApplicationContext : ApplicationContext
         return $"{names} | {connections.Count} connections";
     }
 
-    private static ToolStripMenuItem CreateConnectionsByModeItem(
+    private static ToolStripMenuItem CreateMcpConnectionsItem(
         IReadOnlyList<McpConnectionInfo> connections)
     {
-        var root = new ToolStripMenuItem($"Connections by mode: {connections.Count}");
+        var root = new ToolStripMenuItem(
+            $"MetaMCP → MCP connections: {connections.Count}");
         foreach (var kind in new[] { "PERSISTENT", "SESSION", "IDLE" })
         {
             var matching = connections
