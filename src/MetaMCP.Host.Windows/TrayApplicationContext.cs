@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using Microsoft.Win32;
 
 namespace MetaMCP.Host;
@@ -15,7 +15,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private sealed record McpSessionInfo(
         string SessionId,
-        int ActiveRequests);
+        int InFlightOperations,
+        int OpenEventStreams,
+        long IdleMilliseconds);
 
     private readonly string _baseDirectory;
     private HostSettings _settings;
@@ -456,6 +458,11 @@ internal sealed class TrayApplicationContext : ApplicationContext
             ? result
             : 0;
 
+    private static long ReadLong(System.Text.Json.JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out var value) && value.TryGetInt64(out var result)
+            ? result
+            : 0;
+
     private static IReadOnlyList<McpSessionInfo> ReadSessionDetails(
         System.Text.Json.JsonElement root)
     {
@@ -473,9 +480,16 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 var sessionId = ReadString(session, "sessionId");
                 if (!string.IsNullOrWhiteSpace(sessionId))
                 {
+                    var inFlightOperations = session.TryGetProperty(
+                        "inFlightOperations",
+                        out _)
+                            ? ReadInt(session, "inFlightOperations")
+                            : ReadInt(session, "activeRequests");
                     result.Add(new McpSessionInfo(
                         sessionId,
-                        ReadInt(session, "activeRequests")));
+                        inFlightOperations,
+                        ReadInt(session, "openEventStreams"),
+                        ReadLong(session, "idleMs")));
                 }
             }
             return result;
@@ -489,7 +503,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 if (sessionId.ValueKind == System.Text.Json.JsonValueKind.String &&
                     sessionId.GetString() is { Length: > 0 } value)
                 {
-                    result.Add(new McpSessionInfo(value, 0));
+                    result.Add(new McpSessionInfo(value, 0, 0, 0));
                 }
             }
         }
@@ -579,13 +593,17 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 BuildSessionMenuText(session, linkedConnections))
             {
                 ToolTipText =
-                    "A Streamable HTTP session may keep a long-lived GET request open " +
-                    "even when no tool is running.",
+                    "MCP operations are active POST/tool requests. Event streams are " +
+                    "long-lived GET channels and do not keep an idle session alive.",
             };
             sessionItem.DropDownItems.Add(CreateDisabledMenuItem(
                 $"Session ID: {session.SessionId}"));
             sessionItem.DropDownItems.Add(CreateDisabledMenuItem(
-                $"Open HTTP requests: {session.ActiveRequests}"));
+                $"MCP operations: {session.InFlightOperations}"));
+            sessionItem.DropDownItems.Add(CreateDisabledMenuItem(
+                $"Event streams: {session.OpenEventStreams}"));
+            sessionItem.DropDownItems.Add(CreateDisabledMenuItem(
+                $"Idle: {FormatIdleDuration(session.IdleMilliseconds)}"));
             sessionItem.DropDownItems.Add(new ToolStripSeparator());
             AddConnectionGroups(sessionItem, linkedConnections);
             activeSessionsItem.DropDownItems.Add(sessionItem);
@@ -716,6 +734,24 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private static string ShortSessionId(string sessionId) =>
         sessionId.Length <= 8 ? sessionId : sessionId[..8];
+
+    private static string FormatIdleDuration(long milliseconds)
+    {
+        var duration = TimeSpan.FromMilliseconds(Math.Max(0, milliseconds));
+        if (duration.TotalSeconds < 1)
+        {
+            return "<1s";
+        }
+        if (duration.TotalMinutes < 1)
+        {
+            return $"{(int)duration.TotalSeconds}s";
+        }
+        if (duration.TotalHours < 1)
+        {
+            return $"{(int)duration.TotalMinutes}m {duration.Seconds}s";
+        }
+        return $"{(int)duration.TotalHours}h {duration.Minutes}m";
+    }
 
     private static ToolStripMenuItem CreateDisabledMenuItem(string text) =>
         new(text)

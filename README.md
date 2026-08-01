@@ -100,7 +100,7 @@ Tray дозволяє:
 - запускати, зупиняти й перезапускати runtime;
 - встановлювати або видаляти Windows Service;
 - перемикати активний reverse SSH mapping без restart frontend/backend;
-- показувати під Reverse SSH компактне дерево `MCP`: окремо `MetaMCP → MCP connections` (`persistent`, `session`, `idle`) і `Client sessions`; кожна client session показує назву MCP server, режим і PID, а технічний лічильник відкритих HTTP-запитів винесений у деталі;
+- показувати під Reverse SSH компактне дерево `MCP`: окремо `MetaMCP → MCP connections` (`persistent`, `session`, `idle`) і `Client sessions`; кожна client session показує назву MCP server, режим і PID; у деталях окремо відображаються MCP operations, довгоживучі event streams та idle time;
 - відкривати конфіг і локальний UI.
 У portable mode дочірні Node-процеси входять у Windows Job Object.
 У service mode runtime належить службі, а tray працює як локальний клієнт через named pipe.
