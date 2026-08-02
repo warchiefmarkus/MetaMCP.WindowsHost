@@ -97,7 +97,7 @@ Task `Package: Windows x64` запускає `.vscode/scripts/Package-AlternateW
 нічого з цих слотів не запущено        → нова збірка в Release\win-x64
 ```
 
-Скрипт переносить `config` з поточної запущеної збірки, перевіряє `MetaMCP.exe` і `build-manifest.json`, записує `release-slot.json` та SHA-256. Застарілі каталоги на кшталт `Release-Next`, `Release-Candidate` або `Release-Fixed` не використовуються.
+Скрипт рекурсивно зливає користувацькі значення `config/host.json` з новими default-полями, переносить інші config-файли та перевіряє `MetaMCP.exe` і `build-manifest.json`, записує `release-slot.json` та SHA-256. Застарілі каталоги на кшталт `Release-Next`, `Release-Candidate` або `Release-Fixed` не використовуються.
 
 ## Windows host
 

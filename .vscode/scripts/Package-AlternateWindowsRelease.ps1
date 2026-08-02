@@ -68,6 +68,23 @@ $activeBase = if ($activeProcess) {
 Write-Host "Active slot: $(if ($activeSlot) { $activeSlot } else { 'none' })"
 Write-Host "Build target: $targetOutput"
 
+function Merge-ConfigObject($defaults, $preserved) {
+    foreach ($property in $preserved.PSObject.Properties) {
+        $existing = $defaults.PSObject.Properties[$property.Name]
+        if ($existing -and
+            $existing.Value -is [pscustomobject] -and
+            $property.Value -is [pscustomobject]) {
+            Merge-ConfigObject $existing.Value $property.Value | Out-Null
+        } elseif ($existing) {
+            $existing.Value = $property.Value
+        } else {
+            $defaults | Add-Member -NotePropertyName $property.Name `
+                -NotePropertyValue $property.Value
+        }
+    }
+    return $defaults
+}
+
 $configBackup = $null
 try {
     if ($activeBase -and (Test-Path (Join-Path $activeBase 'config'))) {
@@ -105,9 +122,26 @@ try {
     if ($configBackup) {
         $targetConfig = Join-Path $targetOutput 'config'
         New-Item $targetConfig -ItemType Directory -Force | Out-Null
-        Copy-Item (Join-Path $configBackup '*') $targetConfig `
-            -Recurse -Force -ErrorAction Stop
-        Write-Host "Restored config to: $targetConfig"
+        Get-ChildItem $configBackup -Force |
+            Where-Object Name -ne 'host.json' |
+            Copy-Item -Destination $targetConfig -Recurse -Force -ErrorAction Stop
+
+        $generatedHostConfig = Join-Path $targetConfig 'host.json'
+        $preservedHostConfig = Join-Path $configBackup 'host.json'
+        if ((Test-Path $generatedHostConfig) -and
+            (Test-Path $preservedHostConfig)) {
+            $defaults = Get-Content $generatedHostConfig -Raw | ConvertFrom-Json
+            $preserved = Get-Content $preservedHostConfig -Raw | ConvertFrom-Json
+            $merged = Merge-ConfigObject $defaults $preserved
+            $json = $merged | ConvertTo-Json -Depth 100
+            [IO.File]::WriteAllText(
+                $generatedHostConfig,
+                $json,
+                (New-Object Text.UTF8Encoding($false)))
+        } elseif (Test-Path $preservedHostConfig) {
+            Copy-Item $preservedHostConfig $generatedHostConfig -Force
+        }
+        Write-Host "Merged preserved config into: $targetConfig"
     }
 
     $targetExe = Join-Path $targetOutput 'MetaMCP.exe'
