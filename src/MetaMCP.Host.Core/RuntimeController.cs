@@ -574,6 +574,7 @@ internal sealed class RuntimeController : IAsyncDisposable
         _environment["NODE_ENV"] = "production";
         _environment["BACKEND_HOST"] = "127.0.0.1";
         _environment["METAMCP_NPX_CWD"] = _layout.RunnerDirectory;
+        _environment["METAMCP_HOST_CONTROL_TOKEN"] = _settings.HostControlToken;
     }
 
     private void SetStartingStatus()

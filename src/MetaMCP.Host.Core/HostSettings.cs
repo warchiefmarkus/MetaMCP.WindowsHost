@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 
 namespace MetaMCP.Host;
@@ -13,6 +14,9 @@ internal sealed class HostSettings
     public bool AutoRestart { get; set; } = true;
     public int RestartDelaySeconds { get; set; } = 5;
     public int HealthCheckIntervalSeconds { get; set; } = 10;
+    public int McpMetricsRefreshSeconds { get; set; } = 5;
+    public int McpTelemetryTimeoutMilliseconds { get; set; } = 5000;
+    public string HostControlToken { get; set; } = string.Empty;
     public int HealthCheckTimeoutMilliseconds { get; set; } = 1500;
     public int UnhealthyChecksBeforeRestart { get; set; } = 3;
     public int StartupTimeoutSeconds { get; set; } = 90;
@@ -36,7 +40,11 @@ internal sealed class HostSettings
         var json = File.ReadAllText(path);
         var settings = JsonSerializer.Deserialize<HostSettings>(json, JsonOptions)
             ?? throw new InvalidDataException($"Could not deserialize {path}.");
-        var upgraded = UpgradeLegacyReverseSsh(json, settings.ReverseSsh);
+        var upgraded = UpgradeLegacyReverseSsh(json, settings.ReverseSsh) ||
+            !HasRootProperty(json, nameof(McpMetricsRefreshSeconds)) ||
+            !HasRootProperty(json, nameof(McpTelemetryTimeoutMilliseconds)) ||
+            !HasRootProperty(json, nameof(HostControlToken)) ||
+            string.IsNullOrWhiteSpace(settings.HostControlToken);
         settings.Normalize();
         if (upgraded)
         {
@@ -53,9 +61,29 @@ internal sealed class HostSettings
         File.WriteAllText(path, JsonSerializer.Serialize(this, JsonOptions));
     }
 
-    public void Normalize() => ReverseSsh.Normalize();
+    public void Normalize()
+    {
+        HealthCheckIntervalSeconds = Math.Clamp(HealthCheckIntervalSeconds, 2, 3600);
+        McpMetricsRefreshSeconds = Math.Clamp(McpMetricsRefreshSeconds, 1, 3600);
+        McpTelemetryTimeoutMilliseconds = Math.Clamp(
+            McpTelemetryTimeoutMilliseconds,
+            1000,
+            30000);
+        if (string.IsNullOrWhiteSpace(HostControlToken))
+        {
+            HostControlToken = Convert.ToHexString(
+                RandomNumberGenerator.GetBytes(32));
+        }
+        ReverseSsh.Normalize();
+    }
     public static string GetConfigPath(string baseDirectory) =>
         Path.Combine(baseDirectory, "config", "host.json");
+
+    private static bool HasRootProperty(string json, string propertyName)
+    {
+        using var document = JsonDocument.Parse(json, DocumentOptions);
+        return document.RootElement.TryGetProperty(propertyName, out _);
+    }
 
     private static bool UpgradeLegacyReverseSsh(
         string json,

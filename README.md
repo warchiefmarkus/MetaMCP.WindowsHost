@@ -87,6 +87,18 @@ Build: MetaMCP.Host.Linux (Release)
 
 `Package: Select target` пропонує `win-x64`, `linux-x64`, `linux-arm64` або `all`.
 
+### Почергові Windows release-слоти
+
+Task `Package: Windows x64` запускає `.vscode/scripts/Package-AlternateWindowsRelease.ps1` і ніколи не перезаписує активну збірку:
+
+```text
+запущено Release\win-x64\MetaMCP.exe  → нова збірка в Release2\win-x64
+запущено Release2\win-x64\MetaMCP.exe → нова збірка в Release\win-x64
+нічого з цих слотів не запущено        → нова збірка в Release\win-x64
+```
+
+Скрипт переносить `config` з поточної запущеної збірки, перевіряє `MetaMCP.exe` і `build-manifest.json`, записує `release-slot.json` та SHA-256. Застарілі каталоги на кшталт `Release-Next`, `Release-Candidate` або `Release-Fixed` не використовуються.
+
 ## Windows host
 
 Windows host запускається як portable tray application або Windows Service.
@@ -98,12 +110,15 @@ Release\win-x64\MetaMCP.exe
 Tray дозволяє:
 
 - запускати, зупиняти й перезапускати runtime;
+- виконувати `Reset MCP connections`: закривати всі downstream MCP connections/process trees без зупинки backend, frontend і SSH tunnel; якщо backend не відповідає, Host пропонує повний restart runtime;
 - встановлювати або видаляти Windows Service;
 - перемикати активний reverse SSH mapping без restart frontend/backend;
 - показувати під Reverse SSH компактне дерево `MCP`: окремо `MetaMCP → MCP connections` (`persistent`, `session`, `idle`) і `Client sessions`; кожна client session показує назву MCP server, режим і PID; у деталях окремо відображаються MCP operations, довгоживучі event streams та idle time;
+- показувати в нативному tooltip при наведенні на tray icon сумарну статистику локальних MCP-процесів: кількість PID, CPU та Working Set RAM;
 - відкривати конфіг і локальний UI.
-У portable mode дочірні Node-процеси входять у Windows Job Object.
-У service mode runtime належить службі, а tray працює як локальний клієнт через named pipe.
+У portable mode backend і frontend входять у Windows Job Object з `KILL_ON_JOB_CLOSE`; `Stop`, `Restart`, `Exit` і аварійне завершення Host прибирають їхні дочірні MCP process trees. STDIO transport додатково виконує `taskkill /T /F` під час штатного закриття connection. У service mode використовується той самий `RuntimeController`, а tray працює як локальний клієнт через named pipe.
+
+Ручне завершення всіх `node.exe` не рекомендується: разом із MCP servers воно вбиває MetaMCP backend і frontend. У такому стані tray показує `MCP: backend unavailable` або зберігає останні дані як `MCP telemetry delayed`.
 
 ## Linux host
 
@@ -168,6 +183,15 @@ Systemd використовує `KillMode=control-group`, тому при зу�
 config/host.json
 config/.env.local
 ```
+
+Інтервал оновлення hover-статистики MCP-процесів задається в секундах і застосовується після перезапуску Host:
+
+```json
+"McpMetricsRefreshSeconds": 5,
+"McpTelemetryTimeoutMilliseconds": 5000
+```
+
+Інтервал нормалізується до діапазону `1–3600`, а timeout telemetry — до `1000–30000` мс. Control token для локального endpoint генерується автоматично у `HostControlToken`; його не потрібно задавати вручну. CPU обчислюється між двома послідовними замірами та нормалізується до загальної потужності всіх логічних процесорів; RAM — сума Working Set локальних downstream MCP PID.
 
 Приклад reverse SSH mappings:
 

@@ -39,12 +39,15 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _startItem;
     private readonly ToolStripMenuItem _stopItem;
     private readonly ToolStripMenuItem _restartItem;
+    private readonly ToolStripMenuItem _resetMcpConnectionsItem;
     private readonly ToolStripMenuItem _installServiceItem;
     private readonly ToolStripMenuItem _uninstallServiceItem;
     private readonly ToolStripMenuItem _openMetaMcpItem;
     private readonly ToolStripMenuItem _openConfigItem;
     private readonly System.Windows.Forms.Timer _timer;
+    private readonly System.Windows.Forms.Timer _mcpMetricsTimer;
     private readonly HttpClient _metricsHttp = new() { Timeout = Timeout.InfiniteTimeSpan };
+    private readonly McpProcessMetricsSampler _mcpMetricsSampler = new();
     private readonly Image _greenDot = CreateDot(Color.LimeGreen);
     private readonly Image _yellowDot = CreateDot(Color.Goldenrod);
     private readonly Image _redDot = CreateDot(Color.Crimson);
@@ -53,6 +56,13 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private Image _jsonIcon;
     private bool _busy;
     private bool _exiting;
+    private bool _backendOnline;
+    private bool _mcpMetricsRefreshInProgress;
+    private OverallState _lastOverallState = OverallState.Offline;
+    private McpProcessMetrics? _lastMcpMetrics;
+    private int? _lastSessionCount;
+    private int? _lastConnectionCount;
+    private DateTimeOffset? _lastMcpTelemetryAt;
 
     public TrayApplicationContext(string? baseDirectory = null)
     {
@@ -99,7 +109,15 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _startItem = new ToolStripMenuItem("Start", null, async (_, _) => await StartRuntimeAsync());
         _stopItem = new ToolStripMenuItem("Stop", null, async (_, _) => await StopRuntimeAsync());
         _restartItem = new ToolStripMenuItem("Restart", null, async (_, _) => await RestartRuntimeAsync());
+        _resetMcpConnectionsItem = new ToolStripMenuItem(
+            "Reset MCP connections",
+            null,
+            async (_, _) => await ResetMcpConnectionsAsync())
+        {
+            ToolTipText = "Close all downstream MCP servers without stopping MetaMCP.",
+        };
         _menu.Items.AddRange([_startItem, _stopItem, _restartItem]);
+        _menu.Items.Add(_resetMcpConnectionsItem);
         _menu.Items.Add(new ToolStripSeparator());
         _installServiceItem = new ToolStripMenuItem(
             "Install Windows Service",
@@ -135,6 +153,13 @@ internal sealed class TrayApplicationContext : ApplicationContext
             Enabled = true,
         };
         _timer.Tick += async (_, _) => await RefreshAsync();
+
+        _mcpMetricsTimer = new System.Windows.Forms.Timer
+        {
+            Interval = Math.Clamp(_settings.McpMetricsRefreshSeconds, 1, 3600) * 1000,
+            Enabled = true,
+        };
+        _mcpMetricsTimer.Tick += async (_, _) => await RefreshMcpProcessMetricsAsync();
 
         SystemEvents.UserPreferenceChanged += OnSystemThemeChanged;
 
@@ -270,19 +295,108 @@ internal sealed class TrayApplicationContext : ApplicationContext
     {
         await RunBusyAsync(async () =>
         {
-            if (_serviceMode)
+            await RestartRuntimeCoreAsync();
+            await RefreshAsync();
+        }, "Restart failed");
+    }
+
+    private async Task RestartRuntimeCoreAsync()
+    {
+        if (_serviceMode)
+        {
+            var response = await PipeClient.SendAsync(
+                PipeCommands.Restart,
+                TimeSpan.FromSeconds(120));
+            EnsurePipeSuccess(response);
+        }
+        else
+        {
+            _portableRuntime ??= new RuntimeController(
+                _baseDirectory,
+                _settings,
+                new WindowsRuntimePlatform());
+            await _portableRuntime.RestartAsync();
+        }
+    }
+
+
+    private async Task ResetMcpConnectionsAsync()
+    {
+        var confirmation = MessageBox.Show(
+            "Close all downstream MCP connections and local MCP processes?\n\n" +
+            "Active tool calls will fail. The next tool call will create a fresh connection.",
+            "Reset MCP connections",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2);
+        if (confirmation != DialogResult.Yes)
+        {
+            return;
+        }
+
+        await RunBusyAsync(async () =>
+        {
+            try
             {
-                var response = await PipeClient.SendAsync(PipeCommands.Restart, TimeSpan.FromSeconds(120));
-                EnsurePipeSuccess(response);
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                using var request = new HttpRequestMessage(
+                    HttpMethod.Post,
+                    $"http://127.0.0.1:{_settings.BackendPort}/host-control/mcp-connections/reset");
+                request.Headers.Add(
+                    "X-MetaMCP-Host-Control-Token",
+                    _settings.HostControlToken);
+                using var response = await _metricsHttp.SendAsync(request, timeout.Token);
+                response.EnsureSuccessStatusCode();
+                await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token);
+                using var document = await System.Text.Json.JsonDocument.ParseAsync(
+                    stream,
+                    cancellationToken: timeout.Token);
+                var root = document.RootElement;
+                var requested = ReadInt(root, "requestedConnections");
+                var closed = ReadInt(root, "closedConnections");
+                var failed = ReadInt(root, "failedConnections");
+                var timedOut = ReadInt(root, "timedOutConnections");
+                ShowBalloon(
+                    "MCP connections reset",
+                    $"Closed {closed}/{requested}. Failed: {failed}. Timed out: {timedOut}.",
+                    failed == 0 && timedOut == 0 ? ToolTipIcon.Info : ToolTipIcon.Warning);
+                if (failed > 0 || timedOut > 0)
+                {
+                    var restart = MessageBox.Show(
+                        "Some MCP connections did not close cleanly. Restart the complete runtime to force process-tree cleanup?",
+                        "Incomplete MCP reset",
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Question,
+                        MessageBoxDefaultButton.Button1);
+                    if (restart == DialogResult.Yes)
+                    {
+                        await RestartRuntimeCoreAsync();
+                    }
+                }
             }
-            else
+            catch (Exception resetError)
             {
-                _portableRuntime ??= new RuntimeController(_baseDirectory, _settings, new WindowsRuntimePlatform());
-                await _portableRuntime.RestartAsync();
+                HostLog.Error("MCP connection reset endpoint failed.", resetError);
+                var restart = MessageBox.Show(
+                    "The backend did not complete the MCP reset. Restart the complete MetaMCP runtime instead?",
+                    "MCP reset failed",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question,
+                    MessageBoxDefaultButton.Button1);
+                if (restart != DialogResult.Yes)
+                {
+                    throw;
+                }
+
+                await RestartRuntimeCoreAsync();
+                ShowBalloon(
+                    "MetaMCP restarted",
+                    "The backend was unavailable, so the complete runtime was restarted.",
+                    ToolTipIcon.Warning);
             }
 
             await RefreshAsync();
-        }, "Restart failed");
+        }, "Reset MCP connections failed");
     }
 
     private async Task InstallServiceAsync()
@@ -418,6 +532,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 serviceError,
                 DateTimeOffset.Now));
             SetConnectionCountsUnavailable();
+            SetMcpMetricsUnavailable();
         }
     }
 
@@ -430,7 +545,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         }
 
         using var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(
-            Math.Clamp(_settings.HealthCheckTimeoutMilliseconds, 500, 5000)));
+            Math.Clamp(_settings.McpTelemetryTimeoutMilliseconds, 1000, 30000)));
         try
         {
             using var response = await _metricsHttp.GetAsync(
@@ -447,10 +562,60 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 ReadSessionDetails(root),
                 ReadConnectionDetails(root));
         }
+        catch (Exception ex)
+        {
+            SetConnectionCountsUnavailable(ex.Message);
+        }
+    }
+
+    private async Task RefreshMcpProcessMetricsAsync()
+    {
+        if (_exiting || _mcpMetricsRefreshInProgress)
+        {
+            return;
+        }
+
+        if (!_backendOnline)
+        {
+            SetMcpMetricsUnavailable();
+            return;
+        }
+
+        _mcpMetricsRefreshInProgress = true;
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(
+                Math.Clamp(_settings.McpTelemetryTimeoutMilliseconds, 1000, 30000)));
+            using var response = await _metricsHttp.GetAsync(
+                $"http://127.0.0.1:{_settings.BackendPort}/metamcp/health/sessions",
+                timeout.Token);
+            response.EnsureSuccessStatusCode();
+            await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token);
+            using var document = await System.Text.Json.JsonDocument.ParseAsync(
+                stream,
+                cancellationToken: timeout.Token);
+
+            var processIds = ReadConnectionDetails(document.RootElement)
+                .Where(connection => connection.ProcessId.HasValue)
+                .Select(connection => connection.ProcessId!.Value);
+            _lastMcpMetrics = _mcpMetricsSampler.Sample(processIds);
+        }
         catch
         {
-            SetConnectionCountsUnavailable();
+            SetMcpMetricsUnavailable();
         }
+        finally
+        {
+            _mcpMetricsRefreshInProgress = false;
+            UpdateNotifyTooltip();
+        }
+    }
+
+    private void SetMcpMetricsUnavailable()
+    {
+        _lastMcpMetrics = null;
+        _mcpMetricsSampler.Reset();
+        UpdateNotifyTooltip();
     }
 
     private static int ReadInt(System.Text.Json.JsonElement element, string propertyName) =>
@@ -562,6 +727,10 @@ internal sealed class TrayApplicationContext : ApplicationContext
         IReadOnlyList<McpSessionInfo> sessions,
         IReadOnlyList<McpConnectionInfo> connections)
     {
+        _lastSessionCount = sessions.Count;
+        _lastConnectionCount = connections.Count;
+        _lastMcpTelemetryAt = DateTimeOffset.Now;
+        _sessionsItem.ToolTipText = string.Empty;
         SetActivityItem(
             _sessionsItem,
             $"MCP: {sessions.Count} sessions | {connections.Count} connections",
@@ -768,11 +937,32 @@ internal sealed class TrayApplicationContext : ApplicationContext
         item.Image = image;
     }
 
-    private void SetConnectionCountsUnavailable()
+    private void SetConnectionCountsUnavailable(string? reason = null)
     {
-        SetActivityItem(_sessionsItem, "Sessions: unavailable", _grayDot);
+        if (_backendOnline &&
+            _lastSessionCount is int sessions &&
+            _lastConnectionCount is int connections)
+        {
+            var age = _lastMcpTelemetryAt.HasValue
+                ? FormatIdleDuration((long)(DateTimeOffset.Now - _lastMcpTelemetryAt.Value).TotalMilliseconds)
+                : "unknown";
+            SetActivityItem(
+                _sessionsItem,
+                $"MCP telemetry delayed | last: {sessions} sessions | {connections} connections",
+                _yellowDot);
+            _sessionsItem.ToolTipText =
+                $"Last successful telemetry: {age} ago. {reason}".Trim();
+            return;
+        }
+
+        SetActivityItem(
+            _sessionsItem,
+            _backendOnline ? "MCP telemetry unavailable" : "MCP: backend unavailable",
+            _backendOnline ? _yellowDot : _redDot);
+        _sessionsItem.ToolTipText = reason ?? string.Empty;
         _sessionsItem.DropDownItems.Clear();
-        _sessionsItem.DropDownItems.Add(CreateDisabledMenuItem("Unavailable"));
+        _sessionsItem.DropDownItems.Add(CreateDisabledMenuItem(
+            _backendOnline ? "Telemetry request failed" : "Backend is offline"));
     }
 
     private void UpdateStatusMenu(RuntimeStatus status)
@@ -791,9 +981,30 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _startItem.Enabled = !_busy && !status.DesiredRunning;
         _stopItem.Enabled = !_busy && status.DesiredRunning;
         _restartItem.Enabled = !_busy && status.DesiredRunning;
+        _resetMcpConnectionsItem.Enabled = !_busy &&
+            status.Backend == ComponentState.Online;
 
-        var tooltip = $"MetaMCP: {GetOverallText(status.Overall)}";
+        _backendOnline = status.Backend == ComponentState.Online;
+        _lastOverallState = status.Overall;
+        UpdateNotifyTooltip();
+    }
+
+    private void UpdateNotifyTooltip()
+    {
+        var status = GetOverallText(_lastOverallState);
+        var tooltip = _lastMcpMetrics is { } metrics
+            ? $"MetaMCP {status} | MCP {metrics.ProcessCount} | CPU {metrics.CpuPercent:0.0}% | RAM {FormatMemory(metrics.WorkingSetBytes)}"
+            : $"MetaMCP {status} | MCP metrics unavailable";
         _notifyIcon.Text = tooltip.Length <= 63 ? tooltip : tooltip[..63];
+    }
+
+    private static string FormatMemory(long bytes)
+    {
+        const double megabyte = 1024d * 1024d;
+        const double gigabyte = 1024d * 1024d * 1024d;
+        return bytes >= gigabyte
+            ? $"{bytes / gigabyte:0.0} GB"
+            : $"{bytes / megabyte:0} MB";
     }
 
     private ReverseSshMappingSettings? ResolveMapping(string? mappingId)
@@ -887,6 +1098,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _startItem.Enabled = !busy;
         _stopItem.Enabled = !busy;
         _restartItem.Enabled = !busy;
+        _resetMcpConnectionsItem.Enabled = !busy && _backendOnline;
         _mappingItem.Enabled = !busy && _settings.ReverseSsh.Enabled;
         _installServiceItem.Enabled = !busy;
         _uninstallServiceItem.Enabled = !busy;
@@ -925,6 +1137,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
         _exiting = true;
         _timer.Stop();
+        _mcpMetricsTimer.Stop();
         try
         {
             if (!_serviceMode && _portableRuntime is not null)
@@ -943,6 +1156,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             SystemEvents.UserPreferenceChanged -= OnSystemThemeChanged;
             _notifyIcon.Visible = false;
             _timer.Dispose();
+            _mcpMetricsTimer.Dispose();
             _metricsHttp.Dispose();
             _notifyIcon.Dispose();
             _menu.Dispose();

@@ -24,9 +24,10 @@
     {
       "label": "Package: Windows x64",
       "type": "shell",
-      "command": "dotnet run --project src\\MetaMCP.Packager -c Release -- --repo C:\\DEV\\LLM\\metamcp --target win-x64 --output Release\\win-x64",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${workspaceFolder}\\.vscode\\scripts\\Package-AlternateWindowsRelease.ps1\"",
       "group": "build",
-      "problemMatcher": []
+      "problemMatcher": [],
+      "detail": "Почергово збирає неактивний слот: Release → Release2 або Release2 → Release"
     },
     {
       "label": "Package: Linux x64",
@@ -48,14 +49,25 @@
       "command": "dotnet run --project src\\MetaMCP.Packager -c Release -- --repo C:\\DEV\\LLM\\metamcp --target all --output Release",
       "group": "build",
       "problemMatcher": [],
-      "detail": "Один production build, потім win-x64, linux-x64 та linux-arm64"
+      "detail": "Один production build, потім win-x64, linux-x64 та linux-arm64",
+      "hide": true,
+      "options": {
+        "statusbar": {
+          "hide": true
+        }
+      }
     },
     {
       "label": "Build: MetaMCP.Host.Linux (Release)",
       "type": "shell",
       "command": "dotnet build src\\MetaMCP.Host.Linux -c Release",
       "group": "build",
-      "problemMatcher": "$msCompile"
+      "problemMatcher": "$msCompile",
+      "options": {
+        "statusbar": {
+          "hide": true
+        }
+      }
     },
     {
       "label": "Dev: Quick (Host)",
