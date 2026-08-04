@@ -1043,10 +1043,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private void UpdateNotifyTooltip()
     {
+        UpdateModeMenu();
         var status = GetOverallText(_lastOverallState);
+        var connections = _lastConnectionCount ?? 0;
         var tooltip = _lastMcpMetrics is { } metrics
-            ? $"MetaMCP {status} | MCP {metrics.ProcessCount} | CPU {metrics.CpuPercent:0.0}% | RAM {FormatMemory(metrics.WorkingSetBytes)}"
-            : $"MetaMCP {status} | MCP metrics unavailable";
+            ? $"MetaMCP {status} | MCP {connections} | CPU {metrics.CpuPercent:0.0}% | RAM {FormatMemory(metrics.WorkingSetBytes)}"
+            : $"MetaMCP {status} | MCP {connections} | metrics unavailable";
         _notifyIcon.Text = tooltip.Length <= 63 ? tooltip : tooltip[..63];
     }
 
@@ -1132,9 +1134,11 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private void UpdateModeMenu()
     {
-        _modeItem.Text = _serviceMode
-            ? "Mode: Windows service"
-            : "Mode: portable";
+        var mode = _serviceMode ? "Windows service" : "Portable";
+        var connections = _lastConnectionCount ?? 0;
+        _modeItem.Text = _lastMcpMetrics is { } metrics
+            ? $"{mode} | MCP {connections} | CPU {metrics.CpuPercent:0.0}% | RAM {FormatMemory(metrics.WorkingSetBytes)}"
+            : $"{mode} | MCP {connections} | CPU -- | RAM --";
         _installServiceItem.Visible = !_serviceMode;
         _uninstallServiceItem.Visible = _serviceMode;
     }
