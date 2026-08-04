@@ -19,6 +19,10 @@ internal sealed class TrayApplicationContext : ApplicationContext
         int OpenEventStreams,
         long IdleMilliseconds);
 
+    private sealed record McpTelemetrySnapshot(
+        IReadOnlyList<McpSessionInfo> Sessions,
+        IReadOnlyList<McpConnectionInfo> Connections);
+
     private readonly string _baseDirectory;
     private HostSettings _settings;
     private RuntimeController? _portableRuntime;
@@ -57,9 +61,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private bool _busy;
     private bool _exiting;
     private bool _backendOnline;
-    private bool _mcpMetricsRefreshInProgress;
+    private bool _mcpTelemetryRefreshInProgress;
     private OverallState _lastOverallState = OverallState.Offline;
     private McpProcessMetrics? _lastMcpMetrics;
+    private McpTelemetrySnapshot? _latestMcpTelemetry;
+    private bool _pendingMcpMenuRefresh;
+    private int _consecutiveMcpTelemetryFailures;
     private int? _lastSessionCount;
     private int? _lastConnectionCount;
     private Icon? _generatedTrayIcon;
@@ -140,6 +147,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
             Visible = true,
             ContextMenuStrip = _menu,
         };
+        _menu.Opening += (_, _) => ApplyPendingMcpMenuRefresh();
+        _menu.Closed += (_, _) => ApplyPendingMcpMenuRefresh();
         _notifyIcon.DoubleClick += (_, _) => OpenFrontend();
         _notifyIcon.MouseClick += (_, e) =>
         {
@@ -161,7 +170,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             Interval = Math.Clamp(_settings.McpMetricsRefreshSeconds, 1, 3600) * 1000,
             Enabled = true,
         };
-        _mcpMetricsTimer.Tick += async (_, _) => await RefreshMcpProcessMetricsAsync();
+        _mcpMetricsTimer.Tick += async (_, _) => await RefreshMcpTelemetryAsync();
 
         SystemEvents.UserPreferenceChanged += OnSystemThemeChanged;
 
@@ -515,7 +524,16 @@ internal sealed class TrayApplicationContext : ApplicationContext
             }
 
             UpdateStatusMenu(status);
-            await RefreshConnectionCountsAsync(status.Backend == ComponentState.Online);
+            if (status.Backend == ComponentState.Online &&
+                _latestMcpTelemetry is null)
+            {
+                await RefreshMcpTelemetryAsync();
+            }
+            else if (status.Backend != ComponentState.Online)
+            {
+                SetConnectionCountsUnavailable();
+                SetMcpMetricsUnavailable();
+            }
         }
         catch (Exception ex)
         {
@@ -538,52 +556,21 @@ internal sealed class TrayApplicationContext : ApplicationContext
         }
     }
 
-    private async Task RefreshConnectionCountsAsync(bool backendOnline)
+    private async Task RefreshMcpTelemetryAsync()
     {
-        if (!backendOnline)
-        {
-            SetConnectionCountsUnavailable();
-            return;
-        }
-
-        using var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(
-            Math.Clamp(_settings.McpTelemetryTimeoutMilliseconds, 1000, 30000)));
-        try
-        {
-            using var response = await _metricsHttp.GetAsync(
-                $"http://127.0.0.1:{_settings.BackendPort}/metamcp/health/sessions",
-                timeout.Token);
-            response.EnsureSuccessStatusCode();
-            await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token);
-            using var document = await System.Text.Json.JsonDocument.ParseAsync(
-                stream,
-                cancellationToken: timeout.Token);
-            var root = document.RootElement;
-
-            UpdateSessionsTree(
-                ReadSessionDetails(root),
-                ReadConnectionDetails(root));
-        }
-        catch (Exception ex)
-        {
-            SetConnectionCountsUnavailable(ex.Message);
-        }
-    }
-
-    private async Task RefreshMcpProcessMetricsAsync()
-    {
-        if (_exiting || _mcpMetricsRefreshInProgress)
+        if (_exiting || _mcpTelemetryRefreshInProgress)
         {
             return;
         }
 
         if (!_backendOnline)
         {
+            SetConnectionCountsUnavailable();
             SetMcpMetricsUnavailable();
             return;
         }
 
-        _mcpMetricsRefreshInProgress = true;
+        _mcpTelemetryRefreshInProgress = true;
         try
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(
@@ -597,22 +584,81 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 stream,
                 cancellationToken: timeout.Token);
 
-            var connections = ReadConnectionDetails(document.RootElement);
-            UpdateTrayIconBadge(connections.Count);
-            var processIds = connections
-                .Where(connection => connection.ProcessId.HasValue)
-                .Select(connection => connection.ProcessId!.Value);
-            _lastMcpMetrics = _mcpMetricsSampler.Sample(processIds);
+            var snapshot = new McpTelemetrySnapshot(
+                ReadSessionDetails(document.RootElement),
+                ReadConnectionDetails(document.RootElement));
+            _latestMcpTelemetry = snapshot;
+            _consecutiveMcpTelemetryFailures = 0;
+            ApplyMcpTelemetrySnapshot(snapshot);
         }
-        catch
+        catch (Exception ex)
         {
-            SetMcpMetricsUnavailable();
+            _consecutiveMcpTelemetryFailures++;
+            HostLog.Warn($"MCP telemetry refresh failed: {ex.Message}");
+            HandleMcpTelemetryFailure(ex.Message);
         }
         finally
         {
-            _mcpMetricsRefreshInProgress = false;
+            _mcpTelemetryRefreshInProgress = false;
             UpdateNotifyTooltip();
         }
+    }
+
+    private void ApplyMcpTelemetrySnapshot(McpTelemetrySnapshot snapshot)
+    {
+        _lastSessionCount = snapshot.Sessions.Count;
+        _lastConnectionCount = snapshot.Connections.Count;
+        _lastMcpTelemetryAt = DateTimeOffset.Now;
+        UpdateTrayIconBadge(snapshot.Connections.Count);
+
+        var processIds = snapshot.Connections
+            .Where(connection => connection.ProcessId.HasValue)
+            .Select(connection => connection.ProcessId!.Value);
+        _lastMcpMetrics = _mcpMetricsSampler.Sample(processIds);
+
+        if (IsMcpMenuOpen())
+        {
+            _pendingMcpMenuRefresh = true;
+            return;
+        }
+
+        UpdateSessionsTree(snapshot.Sessions, snapshot.Connections);
+        _pendingMcpMenuRefresh = false;
+    }
+
+    private void ApplyPendingMcpMenuRefresh()
+    {
+        if (!_pendingMcpMenuRefresh ||
+            _latestMcpTelemetry is not { } snapshot ||
+            IsMcpMenuOpen())
+        {
+            return;
+        }
+
+        UpdateSessionsTree(snapshot.Sessions, snapshot.Connections);
+        _pendingMcpMenuRefresh = false;
+    }
+
+    private bool IsMcpMenuOpen() =>
+        _menu.Visible || _sessionsItem.DropDown.Visible;
+
+    private void HandleMcpTelemetryFailure(string reason)
+    {
+        var recentWindow = TimeSpan.FromSeconds(Math.Max(
+            15,
+            Math.Clamp(_settings.McpMetricsRefreshSeconds, 1, 3600) * 3));
+        var hasRecentSnapshot = _lastMcpTelemetryAt is { } lastSuccess &&
+            DateTimeOffset.Now - lastSuccess <= recentWindow;
+
+        if (hasRecentSnapshot && _consecutiveMcpTelemetryFailures < 3)
+        {
+            _sessionsItem.ToolTipText =
+                $"A telemetry refresh failed; keeping the last valid snapshot. {reason}";
+            return;
+        }
+
+        SetConnectionCountsUnavailable(reason);
+        SetMcpMetricsUnavailable();
     }
 
     private void SetMcpMetricsUnavailable()
@@ -731,10 +777,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
         IReadOnlyList<McpSessionInfo> sessions,
         IReadOnlyList<McpConnectionInfo> connections)
     {
-        _lastSessionCount = sessions.Count;
-        _lastConnectionCount = connections.Count;
-        _lastMcpTelemetryAt = DateTimeOffset.Now;
-        UpdateTrayIconBadge(connections.Count);
         _sessionsItem.ToolTipText = string.Empty;
         SetActivityItem(
             _sessionsItem,
