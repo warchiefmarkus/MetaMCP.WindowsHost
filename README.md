@@ -115,6 +115,7 @@ Tray дозволяє:
 - перемикати активний reverse SSH mapping без restart frontend/backend;
 - показувати під Reverse SSH компактне дерево `MCP`: окремо `MetaMCP → MCP connections` (`persistent`, `session`, `idle`) і `Client sessions`; кожна client session показує назву MCP server, режим і PID; у деталях окремо відображаються MCP operations, довгоживучі event streams та idle time;
 - показувати в нативному tooltip при наведенні на tray icon сумарну статистику локальних MCP-процесів: кількість PID, CPU та Working Set RAM;
+- показувати у правому верхньому куті tray icon червоний badge з кількістю поточних `MetaMCP → MCP connections`; при `0` badge не відображається, значення понад `99` показується як `99+`;
 - відкривати конфіг і локальний UI.
 У portable mode backend і frontend входять у Windows Job Object з `KILL_ON_JOB_CLOSE`; `Stop`, `Restart`, `Exit` і аварійне завершення Host прибирають їхні дочірні MCP process trees. STDIO transport додатково виконує `taskkill /T /F` під час штатного закриття connection. У service mode використовується той самий `RuntimeController`, а tray працює як локальний клієнт через named pipe.
 

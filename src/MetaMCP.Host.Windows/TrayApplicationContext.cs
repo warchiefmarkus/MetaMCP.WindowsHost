@@ -62,6 +62,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private McpProcessMetrics? _lastMcpMetrics;
     private int? _lastSessionCount;
     private int? _lastConnectionCount;
+    private Icon? _generatedTrayIcon;
+    private int _displayedTrayConnectionCount = int.MinValue;
     private DateTimeOffset? _lastMcpTelemetryAt;
 
     public TrayApplicationContext(string? baseDirectory = null)
@@ -595,7 +597,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 stream,
                 cancellationToken: timeout.Token);
 
-            var processIds = ReadConnectionDetails(document.RootElement)
+            var connections = ReadConnectionDetails(document.RootElement);
+            UpdateTrayIconBadge(connections.Count);
+            var processIds = connections
                 .Where(connection => connection.ProcessId.HasValue)
                 .Select(connection => connection.ProcessId!.Value);
             _lastMcpMetrics = _mcpMetricsSampler.Sample(processIds);
@@ -730,6 +734,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _lastSessionCount = sessions.Count;
         _lastConnectionCount = connections.Count;
         _lastMcpTelemetryAt = DateTimeOffset.Now;
+        UpdateTrayIconBadge(connections.Count);
         _sessionsItem.ToolTipText = string.Empty;
         SetActivityItem(
             _sessionsItem,
@@ -955,6 +960,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             return;
         }
 
+        UpdateTrayIconBadge(null);
         SetActivityItem(
             _sessionsItem,
             _backendOnline ? "MCP telemetry unavailable" : "MCP: backend unavailable",
@@ -985,6 +991,10 @@ internal sealed class TrayApplicationContext : ApplicationContext
             status.Backend == ComponentState.Online;
 
         _backendOnline = status.Backend == ComponentState.Online;
+        if (!_backendOnline)
+        {
+            UpdateTrayIconBadge(null);
+        }
         _lastOverallState = status.Overall;
         UpdateNotifyTooltip();
     }
@@ -996,6 +1006,24 @@ internal sealed class TrayApplicationContext : ApplicationContext
             ? $"MetaMCP {status} | MCP {metrics.ProcessCount} | CPU {metrics.CpuPercent:0.0}% | RAM {FormatMemory(metrics.WorkingSetBytes)}"
             : $"MetaMCP {status} | MCP metrics unavailable";
         _notifyIcon.Text = tooltip.Length <= 63 ? tooltip : tooltip[..63];
+    }
+
+    private void UpdateTrayIconBadge(int? connectionCount)
+    {
+        var normalizedCount = Math.Clamp(connectionCount ?? 0, 0, 100);
+        if (_displayedTrayConnectionCount == normalizedCount)
+        {
+            return;
+        }
+
+        var nextIcon = normalizedCount > 0
+            ? TrayIconBadgeRenderer.CreateIcon(_applicationIcon, normalizedCount)
+            : null;
+        var previousIcon = _generatedTrayIcon;
+        _notifyIcon.Icon = nextIcon ?? _applicationIcon;
+        _generatedTrayIcon = nextIcon;
+        _displayedTrayConnectionCount = normalizedCount;
+        previousIcon?.Dispose();
     }
 
     private static string FormatMemory(long bytes)
@@ -1155,10 +1183,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
         {
             SystemEvents.UserPreferenceChanged -= OnSystemThemeChanged;
             _notifyIcon.Visible = false;
+            _notifyIcon.Icon = null;
             _timer.Dispose();
             _mcpMetricsTimer.Dispose();
             _metricsHttp.Dispose();
             _notifyIcon.Dispose();
+            _generatedTrayIcon?.Dispose();
             _menu.Dispose();
             _applicationIcon.Dispose();
             _appMenuIcon.Dispose();
