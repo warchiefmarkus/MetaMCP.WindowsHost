@@ -783,131 +783,26 @@ internal sealed class TrayApplicationContext : ApplicationContext
             $"MCP: {sessions.Count} sessions | {connections.Count} connections",
             sessions.Count > 0 || connections.Count > 0 ? _greenDot : _grayDot);
         _sessionsItem.DropDownItems.Clear();
-        _sessionsItem.DropDownItems.Add(CreateMcpConnectionsItem(connections));
 
-        var activeSessionsItem = new ToolStripMenuItem(
-            $"Client sessions: {sessions.Count}");
-        var sessionEntries = sessions
-            .Select(session => new
-            {
-                Session = session,
-                Connections = connections
-                    .Where(connection => connection.SessionIds.Contains(
-                        session.SessionId,
-                        StringComparer.Ordinal))
-                    .ToArray(),
-            })
-            .OrderBy(entry => entry.Connections.FirstOrDefault()?.ServerName ?? string.Empty)
-            .ThenBy(entry => entry.Connections.FirstOrDefault()?.ProcessId ?? int.MaxValue)
-            .ThenBy(entry => entry.Session.SessionId)
-            .ToArray();
-        foreach (var entry in sessionEntries)
-        {
-            var session = entry.Session;
-            var linkedConnections = entry.Connections;
-            var sessionItem = new ToolStripMenuItem(
-                BuildSessionMenuText(session, linkedConnections))
-            {
-                ToolTipText =
-                    "MCP operations are active POST/tool requests. Event streams are " +
-                    "long-lived GET channels and do not keep an idle session alive.",
-            };
-            sessionItem.DropDownItems.Add(CreateDisabledMenuItem(
-                $"Session ID: {session.SessionId}"));
-            sessionItem.DropDownItems.Add(CreateDisabledMenuItem(
-                $"MCP operations: {session.InFlightOperations}"));
-            sessionItem.DropDownItems.Add(CreateDisabledMenuItem(
-                $"Event streams: {session.OpenEventStreams}"));
-            sessionItem.DropDownItems.Add(CreateDisabledMenuItem(
-                $"Idle: {FormatIdleDuration(session.IdleMilliseconds)}"));
-            sessionItem.DropDownItems.Add(new ToolStripSeparator());
-            AddConnectionGroups(sessionItem, linkedConnections);
-            activeSessionsItem.DropDownItems.Add(sessionItem);
-        }
+        AddFlattenedConnectionGroups(_sessionsItem, sessions, connections);
+        AddOrphanSessions(_sessionsItem, sessions, connections);
 
-        if (sessions.Count == 0)
+        if (_sessionsItem.DropDownItems.Count == 0)
         {
-            activeSessionsItem.Enabled = false;
+            _sessionsItem.DropDownItems.Add(
+                CreateDisabledMenuItem("No MCP sessions or connections"));
         }
-        _sessionsItem.DropDownItems.Add(activeSessionsItem);
     }
 
-    private static string BuildSessionMenuText(
-        McpSessionInfo session,
-        IReadOnlyList<McpConnectionInfo> connections)
-    {
-        if (connections.Count == 0)
-        {
-            return $"Session {ShortSessionId(session.SessionId)}";
-        }
-
-        if (connections.Count == 1)
-        {
-            var connection = connections[0];
-            var process = connection.ProcessId is int pid
-                ? $"PID {pid}"
-                : connection.ServerType;
-            return $"{connection.ServerName} [{FormatConnectionKind(connection.Kind)}] | " +
-                process;
-        }
-
-        var serverNames = connections
-            .Select(connection => connection.ServerName)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(name => name)
-            .Take(2)
-            .ToArray();
-        var remaining = connections
-            .Select(connection => connection.ServerName)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Count() - serverNames.Length;
-        var names = string.Join(", ", serverNames) +
-            (remaining > 0 ? $" +{remaining}" : string.Empty);
-        return $"{names} | {connections.Count} connections";
-    }
-
-    private static ToolStripMenuItem CreateMcpConnectionsItem(
-        IReadOnlyList<McpConnectionInfo> connections)
-    {
-        var root = new ToolStripMenuItem(
-            $"MetaMCP → MCP connections: {connections.Count}");
-        foreach (var kind in new[] { "PERSISTENT", "SESSION", "IDLE" })
-        {
-            var matching = connections
-                .Where(connection => connection.Kind == kind)
-                .ToArray();
-            var item = new ToolStripMenuItem(
-                $"{FormatConnectionKind(kind)}: {matching.Length}");
-            if (matching.Length == 0)
-            {
-                item.Enabled = false;
-            }
-            else
-            {
-                AddServerGroups(item, matching);
-            }
-            root.DropDownItems.Add(item);
-        }
-        return root;
-    }
-
-    private static void AddConnectionGroups(
+    private static void AddFlattenedConnectionGroups(
         ToolStripMenuItem parent,
+        IReadOnlyList<McpSessionInfo> sessions,
         IReadOnlyList<McpConnectionInfo> connections)
     {
-        if (connections.Count == 0)
-        {
-            parent.DropDownItems.Add(CreateDisabledMenuItem("No MCP connections"));
-            return;
-        }
+        var sessionById = sessions.ToDictionary(
+            session => session.SessionId,
+            StringComparer.Ordinal);
 
-        AddServerGroups(parent, connections);
-    }
-
-    private static void AddServerGroups(
-        ToolStripMenuItem parent,
-        IReadOnlyList<McpConnectionInfo> connections)
-    {
         foreach (var serverGroup in connections
             .GroupBy(connection => new
             {
@@ -915,27 +810,85 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 connection.ServerType,
                 connection.Kind,
             })
-            .OrderBy(group => group.Key.ServerName))
+            .OrderBy(group => group.Key.ServerName)
+            .ThenBy(group => group.Key.Kind))
         {
-            var shared = serverGroup.Key.Kind == "PERSISTENT"
-                ? " | shared"
+            var groupedConnections = serverGroup
+                .OrderBy(connection => connection.ProcessId ?? int.MaxValue)
+                .ToArray();
+            var countSuffix = groupedConnections.Length > 1
+                ? $" ×{groupedConnections.Length}"
                 : string.Empty;
             var serverItem = new ToolStripMenuItem(
-                $"{serverGroup.Key.ServerName} [{FormatConnectionKind(serverGroup.Key.Kind)}]{shared}");
-
-            foreach (var connection in serverGroup.OrderBy(item => item.ProcessId ?? int.MaxValue))
+                $"{serverGroup.Key.ServerName} " +
+                $"[{FormatConnectionKind(serverGroup.Key.Kind)}]{countSuffix}")
             {
-                var processText = connection.ProcessId is int pid
-                    ? $"PID: {pid} | Transport: {connection.ServerType}"
-                    : $"Transport: {connection.ServerType}";
-                var active = connection.InFlight > 0
-                    ? $" | MCP requests: {connection.InFlight}"
-                    : string.Empty;
+                ToolTipText = $"Transport: {serverGroup.Key.ServerType}",
+            };
+
+            foreach (var connection in groupedConnections)
+            {
+                var linkedSessions = connection.SessionIds
+                    .Where(sessionById.ContainsKey)
+                    .Select(sessionId => sessionById[sessionId])
+                    .ToArray();
                 serverItem.DropDownItems.Add(CreateDisabledMenuItem(
-                    $"{processText}{active}"));
+                    BuildConnectionEntryText(connection, linkedSessions)));
             }
 
             parent.DropDownItems.Add(serverItem);
+        }
+    }
+
+    private static string BuildConnectionEntryText(
+        McpConnectionInfo connection,
+        IReadOnlyList<McpSessionInfo> sessions)
+    {
+        var parts = new List<string>();
+        parts.Add(connection.ProcessId is int pid
+            ? $"PID {pid}"
+            : connection.ServerType);
+
+        if (connection.SessionIds.Length == 1)
+        {
+            parts.Add($"session {ShortSessionId(connection.SessionIds[0])}");
+        }
+        else if (connection.SessionIds.Length > 1)
+        {
+            parts.Add($"sessions {connection.SessionIds.Length}");
+        }
+
+        if (connection.InFlight > 0)
+        {
+            parts.Add($"active {connection.InFlight}");
+        }
+
+        if (sessions.Count == 1)
+        {
+            parts.Add($"idle {FormatIdleDuration(sessions[0].IdleMilliseconds)}");
+        }
+
+        return string.Join(" | ", parts);
+    }
+
+    private static void AddOrphanSessions(
+        ToolStripMenuItem parent,
+        IReadOnlyList<McpSessionInfo> sessions,
+        IReadOnlyList<McpConnectionInfo> connections)
+    {
+        var linkedSessionIds = connections
+            .SelectMany(connection => connection.SessionIds)
+            .ToHashSet(StringComparer.Ordinal);
+
+        foreach (var session in sessions
+            .Where(session => !linkedSessionIds.Contains(session.SessionId))
+            .OrderBy(session => session.SessionId))
+        {
+            var activity = session.InFlightOperations > 0
+                ? $"active {session.InFlightOperations}"
+                : $"idle {FormatIdleDuration(session.IdleMilliseconds)}";
+            parent.DropDownItems.Add(CreateDisabledMenuItem(
+                $"Session {ShortSessionId(session.SessionId)} [no MCP] | {activity}"));
         }
     }
 

@@ -113,7 +113,7 @@ Tray дозволяє:
 - виконувати `Reset MCP connections`: закривати всі downstream MCP connections/process trees без зупинки backend, frontend і SSH tunnel; якщо backend не відповідає, Host пропонує повний restart runtime;
 - встановлювати або видаляти Windows Service;
 - перемикати активний reverse SSH mapping без restart frontend/backend;
-- показувати під Reverse SSH компактне дерево `MCP`: окремо `MetaMCP → MCP connections` (`persistent`, `session`, `idle`) і `Client sessions`; кожна client session показує назву MCP server, режим і PID; у деталях окремо відображаються MCP operations, довгоживучі event streams та idle time;
+- показувати під Reverse SSH сплощене дерево `MCP`: без проміжних `persistent/session/idle` і `Client sessions` меню; одразу відображаються сервери на кшталт `dc [session] ×8`, а їх submenu містить PID, короткий session ID, active request count та idle time; client sessions без downstream connection показуються окремим leaf `Session … [no MCP]`;
 - показувати у верхньому рядку tray-меню режим без префікса `Mode:` та агреговані метрики у форматі `Portable | MCP 3 | CPU 4,2% | RAM 386 MB`; `MCP` — кількість поточних `MetaMCP → MCP connections`;
 - показувати в нативному tooltip при наведенні на tray icon ті самі CPU, Working Set RAM і кількість MCP connections;
 - показувати у правому верхньому куті tray icon червоний badge з кількістю поточних `MetaMCP → MCP connections`; при `0` badge не відображається, значення понад `99` показується як `99+`;
