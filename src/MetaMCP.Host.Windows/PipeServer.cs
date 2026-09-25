@@ -103,6 +103,11 @@ internal sealed class PipeServer(RuntimeController runtime)
                 return PipeResponse.Ok(await _runtime.SwitchReverseSshMappingAsync(
                     request.MappingId,
                     cancellationToken));
+            case PipeCommands.ResetReverseSsh:
+                var reset = await _runtime.ResetReverseSshAsync(cancellationToken);
+                return PipeResponse.Ok(
+                    _runtime.CurrentStatus,
+                    reset.Summary);
             default:
                 return PipeResponse.Fail(
                     $"Unknown command: {request.Command}",

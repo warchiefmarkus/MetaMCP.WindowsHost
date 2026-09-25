@@ -78,6 +78,7 @@ Windows package містить фізичний `node_modules` без junction/s
 ```text
 Package: Select target
 Package: Windows x64
+Deploy: Windows A/B safe switch
 Package: Linux x64
 Package: Linux ARM64
 Package: All platforms
@@ -87,17 +88,29 @@ Build: MetaMCP.Host.Linux (Release)
 
 `Package: Select target` пропонує `win-x64`, `linux-x64`, `linux-arm64` або `all`.
 
-### Почергові Windows release-слоти
+### Windows A/B release slots
 
-Task `Package: Windows x64` запускає `.vscode/scripts/Package-AlternateWindowsRelease.ps1` і ніколи не перезаписує активну збірку:
+Windows deploy використовує два стабільні слоти та один runtime state-файл:
 
 ```text
-запущено Release\win-x64\MetaMCP.exe  → нова збірка в Release2\win-x64
-запущено Release2\win-x64\MetaMCP.exe → нова збірка в Release\win-x64
-нічого з цих слотів не запущено        → нова збірка в Release\win-x64
+ReleaseA\win-x64\
+ReleaseB\win-x64\
+current.json
+pending-update.json   # існує лише між build і cutover
 ```
 
-Скрипт рекурсивно зливає користувацькі значення `config/host.json` з новими default-полями, переносить інші config-файли та перевіряє `MetaMCP.exe` і `build-manifest.json`, записує `release-slot.json` та SHA-256. Застарілі каталоги на кшталт `Release-Next`, `Release-Candidate` або `Release-Fixed` не використовуються.
+`current.json` є єдиним джерелом істини для активного слота. `Package: Windows x64` лише збирає **неактивний** слот через `scripts/Build-WindowsCandidate.ps1` і не перериває запущений MetaMCP. `Deploy: Windows A/B safe switch` запускає `scripts/Update-WindowsAB.ps1`: після успішної збірки він створює відокремлений `cmd.exe` з `timeout`, який уже поза поточним MetaMCP tool-call виконує `Switch-WindowsSlot.ps1`.
+
+Cutover має такий порядок:
+
+```text
+active A → build B → validate → delayed cmd → stop A → start B → health OK → atomic current.json=B
+active B → build A → validate → delayed cmd → stop B → start A → health OK → atomic current.json=A
+```
+
+Якщо candidate не проходить backend/frontend health-check, switch-скрипт завершує candidate і запускає попередній executable. Перший перехід зі старих `Release/Release2` навмисно йде в `ReleaseB`; legacy Windows release зберігається як rollback. Він видаляється лише після наступного успішного A/B переходу, коли rollback уже знаходиться в іншому A/B слоті.
+
+Під час build у candidate переносяться runtime `config` і `data`; `host.json` merge-иться поверх нових default-полів. Старий `.vscode/scripts/Package-AlternateWindowsRelease.ps1` залишений лише як compatibility-wrapper до нового candidate builder.
 
 ## Windows host
 
@@ -113,8 +126,8 @@ Tray дозволяє:
 - виконувати `Reset MCP connections`: закривати всі downstream MCP connections/process trees без зупинки backend, frontend і SSH tunnel; якщо backend не відповідає, Host пропонує повний restart runtime;
 - встановлювати або видаляти Windows Service;
 - перемикати активний reverse SSH mapping без restart frontend/backend;
-- показувати під Reverse SSH сплощене дерево `MCP`: без проміжних `persistent/session/idle` і `Client sessions` меню; одразу відображаються сервери на кшталт `dc [session] ×8`, а їх submenu містить PID, короткий session ID, active request count та idle time; client sessions без downstream connection показуються окремим leaf `Session … [no MCP]`;
-- показувати у верхньому рядку tray-меню режим без префікса `Mode:` та агреговані метрики у форматі `Portable | MCP 3 | CPU 4,2% | RAM 386 MB`; `MCP` — кількість поточних `MetaMCP → MCP connections`;
+- показувати компактне дерево `Connections: N | Sessions: M`: без проміжних `persistent/session/idle` і `Client sessions` меню; один сервер одразу містить PID, transport, короткий session ID, active request count та idle time, а кілька однакових серверів групуються як `dc [session] ×8`; client sessions без downstream connection показуються окремим leaf `Session … [no MCP]`;
+- показувати у верхньому рядку tray-меню агреговані метрики у форматі `MCP 3 | CPU 4,2% | RAM 386 MB`; `MCP` — кількість поточних `MetaMCP → MCP connections`;
 - показувати в нативному tooltip при наведенні на tray icon ті самі CPU, Working Set RAM і кількість MCP connections;
 - показувати у правому верхньому куті tray icon червоний badge з кількістю поточних `MetaMCP → MCP connections`; при `0` badge не відображається, значення понад `99` показується як `99+`;
 - відкривати конфіг і локальний UI.
@@ -226,10 +239,15 @@ config/.env.local
 ```
 Для кожного ПК або сервера використовується унікальний VPS `RemotePort`.
 Mapping `proxmox` використовує VPS `18081` і nginx path `/metamcppct`; на Windows його не слід обирати.
+Mapping `yoga` використовує VPS `18083` і nginx path `/metamcpyoga`; це Windows-профіль для Yoga.
 
 SSH.NET читає alias з користувацького `~/.ssh/config`. Для service deployment
 можна зберегти розв’язані `HostName`, `User`, `Port`, `PrivateKeyPath` і fingerprint
 безпосередньо в `host.json`.
+
+Reverse SSH додатково виконує періодичну контрольну SSH-команду. Якщо TCP-сесія
+залишилася формально `Established`, але перестала відповідати, probe завершується
+за таймаутом, тунель закривається і host автоматично підключається знову.
 
 Старий конфіг з одиночними `RemotePort`/`LocalPort` автоматично мігрується
 до іменованого mapping-профілю.

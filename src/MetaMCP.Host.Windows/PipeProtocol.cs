@@ -17,6 +17,7 @@ internal static class PipeCommands
     public const string Stop = "stop";
     public const string Restart = "restart";
     public const string SelectMapping = "select-mapping";
+    public const string ResetReverseSsh = "reset-reverse-ssh";
 }
 
 internal sealed record PipeRequest(string Command, string? MappingId = null);
@@ -24,9 +25,14 @@ internal sealed record PipeRequest(string Command, string? MappingId = null);
 internal sealed record PipeResponse(
     bool Success,
     RuntimeStatus? Status,
-    string? Error)
+    string? Error,
+    string? Message)
 {
-    public static PipeResponse Ok(RuntimeStatus status) => new(true, status, null);
+    public static PipeResponse Ok(
+        RuntimeStatus status,
+        string? message = null) =>
+        new(true, status, null, message);
+
     public static PipeResponse Fail(string error, RuntimeStatus? status = null) =>
-        new(false, status, error);
+        new(false, status, error, null);
 }

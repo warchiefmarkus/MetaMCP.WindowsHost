@@ -1,6 +1,9 @@
 **/bin/
 **/obj/
 Release*/
+current.json
+pending-update.json
+work/
 .host-publish/
 .package-staging/
 .linux-app-staging/

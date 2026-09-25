@@ -162,6 +162,8 @@ internal sealed class ReverseSshSettings
     public List<ReverseSshMappingSettings> Mappings { get; set; } = CreateDefaultMappings();
     public int ConnectTimeoutSeconds { get; set; } = 15;
     public int ReconnectDelaySeconds { get; set; } = 10;
+    public int HealthProbeIntervalSeconds { get; set; } = 30;
+    public int HealthProbeTimeoutSeconds { get; set; } = 5;
 
     public ReverseSshMappingSettings GetActiveMapping()
     {
@@ -181,6 +183,10 @@ internal sealed class ReverseSshSettings
 
     public void Normalize()
     {
+        ConnectTimeoutSeconds = Math.Clamp(ConnectTimeoutSeconds, 3, 120);
+        ReconnectDelaySeconds = Math.Clamp(ReconnectDelaySeconds, 2, 300);
+        HealthProbeIntervalSeconds = Math.Clamp(HealthProbeIntervalSeconds, 5, 3600);
+        HealthProbeTimeoutSeconds = Math.Clamp(HealthProbeTimeoutSeconds, 1, 60);
         Mappings ??= [];
         if (Mappings.Count == 0)
         {
@@ -244,6 +250,16 @@ internal sealed class ReverseSshSettings
             PublicPath = "/metamcpthp",
             RemoteBindHost = "127.0.0.1",
             RemotePort = 18082,
+            LocalHost = localHost,
+            LocalPort = localPort,
+        },
+        new()
+        {
+            Id = "yoga",
+            DisplayName = "Yoga",
+            PublicPath = "/metamcpyoga",
+            RemoteBindHost = "127.0.0.1",
+            RemotePort = 18083,
             LocalHost = localHost,
             LocalPort = localPort,
         },

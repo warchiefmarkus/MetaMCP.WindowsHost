@@ -170,6 +170,47 @@ internal sealed class RuntimeController : IAsyncDisposable
         }
     }
 
+    public async Task<ReverseSshResetResult> ResetReverseSshAsync(
+        CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            ThrowIfDisposed();
+            if (!_desiredRunning)
+            {
+                throw new InvalidOperationException(
+                    "MetaMCP runtime must be running before resetting Reverse SSH.");
+            }
+
+            if (!_settings.ReverseSsh.Enabled)
+            {
+                throw new InvalidOperationException(
+                    "Reverse SSH is disabled in host.json.");
+            }
+
+            _lastError = null;
+            var result = await _tunnel.ResetRemoteForwardAsync(cancellationToken);
+            _lastError = null;
+            await RefreshStatusAsync(cancellationToken);
+            return result;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _lastError = ex.Message;
+            await RefreshStatusAsync();
+            throw;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public async Task<RuntimeStatus> RefreshStatusAsync(
         CancellationToken cancellationToken = default)
     {
@@ -478,6 +519,16 @@ internal sealed class RuntimeController : IAsyncDisposable
                 {
                     ResetHealthFailureCounters();
                     continue;
+                }
+
+                if (_settings.ReverseSsh.Enabled &&
+                    status.ReverseSsh != ComponentState.Online)
+                {
+                    // The tunnel has its own reconnect loop. This extra start
+                    // call repairs the rare case where that loop exited without
+                    // leaving a running task; Start() is idempotent while one
+                    // is already active.
+                    _tunnel.Start();
                 }
 
                 var backendAlive = IsAlive(_backend);

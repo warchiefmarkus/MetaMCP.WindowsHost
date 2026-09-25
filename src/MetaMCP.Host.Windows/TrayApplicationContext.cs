@@ -5,6 +5,9 @@ namespace MetaMCP.Host;
 
 internal sealed class TrayApplicationContext : ApplicationContext
 {
+    private const int TrayMenuWidth = 300;
+    private const int McpTelemetryRetryCount = 2;
+
     private sealed record McpConnectionInfo(
         string ServerName,
         string ServerType,
@@ -30,23 +33,20 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly NotifyIcon _notifyIcon;
     private readonly Icon _applicationIcon;
     private readonly ContextMenuStrip _menu;
-    private readonly ToolStripMenuItem _modeItem;
-    private readonly ToolStripMenuItem _overallItem;
-    private readonly ToolStripMenuItem _backendItem;
-    private readonly ToolStripMenuItem _frontendItem;
-    private readonly ToolStripMenuItem _databaseItem;
-    private readonly ToolStripMenuItem _sshItem;
+    private readonly ToolStripMenuItem _summaryItem;
+    private readonly ToolStripControlHost _statusTableHost;
+    private readonly StatusTableControl _statusTable;
     private readonly ToolStripMenuItem _sessionsItem;
     private readonly ToolStripMenuItem _mappingItem;
     private readonly Dictionary<string, ToolStripMenuItem> _mappingItems =
         new(StringComparer.OrdinalIgnoreCase);
-    private readonly ToolStripMenuItem _startItem;
+    private readonly ToolStripMenuItem _startRestartItem;
     private readonly ToolStripMenuItem _stopItem;
-    private readonly ToolStripMenuItem _restartItem;
     private readonly ToolStripMenuItem _resetMcpConnectionsItem;
+    private readonly ToolStripMenuItem _resetReverseSshItem;
     private readonly ToolStripMenuItem _installServiceItem;
     private readonly ToolStripMenuItem _uninstallServiceItem;
-    private readonly ToolStripMenuItem _openMetaMcpItem;
+    private readonly ToolStripMenuItem _openWebItem;
     private readonly ToolStripMenuItem _openConfigItem;
     private readonly System.Windows.Forms.Timer _timer;
     private readonly System.Windows.Forms.Timer _mcpMetricsTimer;
@@ -61,6 +61,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private bool _busy;
     private bool _exiting;
     private bool _backendOnline;
+    private bool _runtimeDesiredRunning;
     private bool _mcpTelemetryRefreshInProgress;
     private OverallState _lastOverallState = OverallState.Offline;
     private McpProcessMetrics? _lastMcpMetrics;
@@ -85,39 +86,49 @@ internal sealed class TrayApplicationContext : ApplicationContext
             ?? (Icon)SystemIcons.Application.Clone();
         _appMenuIcon = LoadEmbeddedIcon("metamcp_32.png") ?? _applicationIcon.ToBitmap();
         _jsonIcon = CreateJsonForCurrentTheme();
-        _menu = new ContextMenuStrip();
-        _modeItem = CreateInformationItem(string.Empty);
-        _overallItem = CreateStatusItem("Status: checking...");
-        _backendItem = CreateStatusItem("Backend: checking...");
-        _frontendItem = CreateStatusItem("Frontend: checking...");
-        _databaseItem = CreateStatusItem("PostgreSQL: checking...");
-        _sshItem = CreateStatusItem("Reverse SSH: checking...");
+        _menu = new ContextMenuStrip
+        {
+            AutoSize = true,
+            MinimumSize = new Size(TrayMenuWidth, 0),
+            MaximumSize = new Size(TrayMenuWidth, 0),
+        };
+        _summaryItem = CreateInformationItem(string.Empty);
+        _statusTable = new StatusTableControl();
+        _statusTableHost = new ToolStripControlHost(_statusTable)
+        {
+            AutoSize = true,
+            Margin = Padding.Empty,
+            Padding = Padding.Empty,
+        };
         _sessionsItem = CreateStatusItem("Sessions: checking...");
         _mappingItem = new ToolStripMenuItem("Reverse SSH mapping");
         BuildMappingMenu();
         _menu.Items.AddRange([
-            _modeItem,
-            new ToolStripSeparator(),
-            _overallItem,
-            _backendItem,
-            _frontendItem,
-            _databaseItem,
-            _sshItem,
-            new ToolStripSeparator(),
+            _summaryItem,
             _sessionsItem,
+            new ToolStripSeparator(),
+            _statusTableHost,
             new ToolStripSeparator(),
             _mappingItem,
             new ToolStripSeparator(),
         ]);
 
-        _openMetaMcpItem = new ToolStripMenuItem("Open MetaMCP", _appMenuIcon, (_, _) => OpenFrontend());
+        _openWebItem = new ToolStripMenuItem(
+            "MetaMCP Webs",
+            _appMenuIcon,
+            (_, _) => OpenFrontend())
+        {
+            ToolTipText = "Open the MetaMCP web interface.",
+        };
         _openConfigItem = new ToolStripMenuItem("Open configuration", _jsonIcon, (_, _) => OpenConfiguration());
-        _menu.Items.Add(_openMetaMcpItem);
+        _menu.Items.Add(_openWebItem);
         _menu.Items.Add(_openConfigItem);
         _menu.Items.Add(new ToolStripSeparator());
-        _startItem = new ToolStripMenuItem("Start", null, async (_, _) => await StartRuntimeAsync());
+        _startRestartItem = new ToolStripMenuItem(
+            "Start",
+            null,
+            async (_, _) => await StartOrRestartRuntimeAsync());
         _stopItem = new ToolStripMenuItem("Stop", null, async (_, _) => await StopRuntimeAsync());
-        _restartItem = new ToolStripMenuItem("Restart", null, async (_, _) => await RestartRuntimeAsync());
         _resetMcpConnectionsItem = new ToolStripMenuItem(
             "Reset MCP connections",
             null,
@@ -125,8 +136,17 @@ internal sealed class TrayApplicationContext : ApplicationContext
         {
             ToolTipText = "Close all downstream MCP servers without stopping MetaMCP.",
         };
-        _menu.Items.AddRange([_startItem, _stopItem, _restartItem]);
+        _resetReverseSshItem = new ToolStripMenuItem(
+            "Technical SSH reset",
+            null,
+            async (_, _) => await ResetReverseSshAsync())
+        {
+            ToolTipText =
+                "Restart the tunnel and clear stale remote sshd listeners on the active VPS port.",
+        };
+        _menu.Items.AddRange([_startRestartItem, _stopItem]);
         _menu.Items.Add(_resetMcpConnectionsItem);
+        _menu.Items.Add(_resetReverseSshItem);
         _menu.Items.Add(new ToolStripSeparator());
         _installServiceItem = new ToolStripMenuItem(
             "Install Windows Service",
@@ -138,6 +158,11 @@ internal sealed class TrayApplicationContext : ApplicationContext
             async (_, _) => await UninstallServiceAsync());
         _menu.Items.AddRange([_installServiceItem, _uninstallServiceItem]);
         _menu.Items.Add(new ToolStripSeparator());
+        _menu.Items.Add(new ToolStripMenuItem($"Version: {GetDisplayVersion()}")
+        {
+            Enabled = false,
+        });
+        _menu.Items.Add(new ToolStripSeparator());
         _menu.Items.Add("Exit", null, async (_, _) => await ExitAsync());
 
         _notifyIcon = new NotifyIcon
@@ -147,7 +172,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
             Visible = true,
             ContextMenuStrip = _menu,
         };
-        _menu.Opening += (_, _) => ApplyPendingMcpMenuRefresh();
+        _menu.Opening += (_, _) =>
+        {
+            ApplyPendingMcpMenuRefresh();
+            StretchTopLevelItems();
+        };
+        _menu.Opened += (_, _) => StretchTopLevelItems();
         _menu.Closed += (_, _) => ApplyPendingMcpMenuRefresh();
         _notifyIcon.DoubleClick += (_, _) => OpenFrontend();
         _notifyIcon.MouseClick += (_, e) =>
@@ -174,7 +204,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
         SystemEvents.UserPreferenceChanged += OnSystemThemeChanged;
 
-        UpdateModeMenu();
+        UpdateSummaryMenu();
         _ = InitializeAsync();
     }
 
@@ -265,23 +295,39 @@ internal sealed class TrayApplicationContext : ApplicationContext
         }, "Could not change reverse SSH mapping");
     }
 
-    private async Task StartRuntimeAsync()
+    private async Task StartOrRestartRuntimeAsync()
     {
+        var shouldRestart = _runtimeDesiredRunning;
         await RunBusyAsync(async () =>
         {
-            if (_serviceMode)
+            if (shouldRestart)
             {
-                var response = await PipeClient.SendAsync(PipeCommands.Start);
-                EnsurePipeSuccess(response);
+                await RestartRuntimeCoreAsync();
             }
             else
             {
-                _portableRuntime ??= new RuntimeController(_baseDirectory, _settings, new WindowsRuntimePlatform());
-                await _portableRuntime.StartAsync();
+                await StartRuntimeCoreAsync();
             }
 
             await RefreshAsync();
-        }, "Start failed");
+        }, shouldRestart ? "Restart failed" : "Start failed");
+    }
+
+    private async Task StartRuntimeCoreAsync()
+    {
+        if (_serviceMode)
+        {
+            var response = await PipeClient.SendAsync(PipeCommands.Start);
+            EnsurePipeSuccess(response);
+        }
+        else
+        {
+            _portableRuntime ??= new RuntimeController(
+                _baseDirectory,
+                _settings,
+                new WindowsRuntimePlatform());
+            await _portableRuntime.StartAsync();
+        }
     }
 
     private async Task StopRuntimeAsync()
@@ -300,15 +346,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
             await RefreshAsync();
         }, "Stop failed");
-    }
-
-    private async Task RestartRuntimeAsync()
-    {
-        await RunBusyAsync(async () =>
-        {
-            await RestartRuntimeCoreAsync();
-            await RefreshAsync();
-        }, "Restart failed");
     }
 
     private async Task RestartRuntimeCoreAsync()
@@ -410,6 +447,68 @@ internal sealed class TrayApplicationContext : ApplicationContext
         }, "Reset MCP connections failed");
     }
 
+    private async Task ResetReverseSshAsync()
+    {
+        var mapping = ResolveMapping(_settings.ReverseSsh.ActiveMapping);
+        if (mapping is null)
+        {
+            throw new InvalidOperationException(
+                "The active Reverse SSH mapping is missing from host.json.");
+        }
+
+        var confirmation = MessageBox.Show(
+            $"Restart Reverse SSH [{mapping.DisplayName}] and clear stale remote SSH listeners?\n\n" +
+            $"Only sshd sessions listening on VPS port {mapping.RemotePort} will be terminated.\n" +
+            "SSH port 22, other mapping ports and VPS services will not be changed.",
+            "Technical SSH reset",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2);
+        if (confirmation != DialogResult.Yes)
+        {
+            return;
+        }
+
+        await RunBusyAsync(async () =>
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+            RuntimeStatus status;
+            string summary;
+            if (_serviceMode)
+            {
+                var response = await PipeClient.SendAsync(
+                    PipeCommands.ResetReverseSsh,
+                    TimeSpan.FromSeconds(120),
+                    timeout.Token);
+                EnsurePipeSuccess(response);
+                status = response.Status!;
+                summary = response.Message ??
+                    $"{mapping.DisplayName}: Reverse SSH reset completed.";
+                _settings = HostSettings.Load(_baseDirectory);
+                BuildMappingMenu();
+            }
+            else
+            {
+                _portableRuntime ??= new RuntimeController(
+                    _baseDirectory,
+                    _settings,
+                    new WindowsRuntimePlatform());
+                var result = await _portableRuntime.ResetReverseSshAsync(timeout.Token);
+                status = await _portableRuntime.RefreshStatusAsync(timeout.Token);
+                summary = result.Summary;
+            }
+
+            UpdateStatusMenu(status);
+            ShowBalloon(
+                "Reverse SSH technical reset",
+                summary + " Tunnel is online.",
+                status.ReverseSsh == ComponentState.Online
+                    ? ToolTipIcon.Info
+                    : ToolTipIcon.Warning);
+            await RefreshAsync();
+        }, "Reverse SSH technical reset failed");
+    }
+
     private async Task InstallServiceAsync()
     {
         if (_serviceMode || _busy)
@@ -440,7 +539,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             }
 
             _serviceMode = true;
-            UpdateModeMenu();
+            UpdateSummaryMenu();
             await WaitForPipeAsync(TimeSpan.FromSeconds(30));
             await RefreshAsync();
             ShowBalloon(
@@ -479,7 +578,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             }
 
             _serviceMode = false;
-            UpdateModeMenu();
+            UpdateSummaryMenu();
             CreatePortableRuntime();
             if (_settings.AutoStartRuntime)
             {
@@ -504,7 +603,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 if (!ServiceInstaller.IsInstalled())
                 {
                     _serviceMode = false;
-                    UpdateModeMenu();
+                    UpdateSummaryMenu();
                     CreatePortableRuntime();
                     status = await _portableRuntime!.RefreshStatusAsync();
                 }
@@ -573,20 +672,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _mcpTelemetryRefreshInProgress = true;
         try
         {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(
-                Math.Clamp(_settings.McpTelemetryTimeoutMilliseconds, 1000, 30000)));
-            using var response = await _metricsHttp.GetAsync(
-                $"http://127.0.0.1:{_settings.BackendPort}/metamcp/health/sessions",
-                timeout.Token);
-            response.EnsureSuccessStatusCode();
-            await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token);
-            using var document = await System.Text.Json.JsonDocument.ParseAsync(
-                stream,
-                cancellationToken: timeout.Token);
-
-            var snapshot = new McpTelemetrySnapshot(
-                ReadSessionDetails(document.RootElement),
-                ReadConnectionDetails(document.RootElement));
+            var snapshot = await FetchMcpTelemetrySnapshotAsync();
             _latestMcpTelemetry = snapshot;
             _consecutiveMcpTelemetryFailures = 0;
             ApplyMcpTelemetrySnapshot(snapshot);
@@ -602,6 +688,54 @@ internal sealed class TrayApplicationContext : ApplicationContext
             _mcpTelemetryRefreshInProgress = false;
             UpdateNotifyTooltip();
         }
+    }
+
+    private async Task<McpTelemetrySnapshot> FetchMcpTelemetrySnapshotAsync()
+    {
+        Exception? lastError = null;
+        var timeoutMilliseconds = Math.Clamp(
+            _settings.McpTelemetryTimeoutMilliseconds,
+            1000,
+            30000);
+
+        for (var attempt = 1; attempt <= McpTelemetryRetryCount; attempt++)
+        {
+            try
+            {
+                using var timeout = new CancellationTokenSource(
+                    TimeSpan.FromMilliseconds(timeoutMilliseconds));
+                using var request = new HttpRequestMessage(
+                    HttpMethod.Get,
+                    $"http://127.0.0.1:{_settings.BackendPort}/metamcp/health/sessions");
+                using var response = await _metricsHttp.SendAsync(
+                    request,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    timeout.Token);
+                response.EnsureSuccessStatusCode();
+                await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token);
+                using var document = await System.Text.Json.JsonDocument.ParseAsync(
+                    stream,
+                    cancellationToken: timeout.Token);
+
+                return new McpTelemetrySnapshot(
+                    ReadSessionDetails(document.RootElement),
+                    ReadConnectionDetails(document.RootElement));
+            }
+            catch (Exception ex) when (attempt < McpTelemetryRetryCount && !_exiting)
+            {
+                lastError = ex;
+                HostLog.Warn(
+                    $"MCP telemetry attempt {attempt}/{McpTelemetryRetryCount} failed: {ex.Message}");
+                await Task.Delay(150 * attempt);
+            }
+            catch (Exception ex)
+            {
+                lastError = ex;
+                break;
+            }
+        }
+
+        throw lastError ?? new InvalidOperationException("MCP telemetry request failed.");
     }
 
     private void ApplyMcpTelemetrySnapshot(McpTelemetrySnapshot snapshot)
@@ -644,16 +778,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private void HandleMcpTelemetryFailure(string reason)
     {
-        var recentWindow = TimeSpan.FromSeconds(Math.Max(
-            15,
-            Math.Clamp(_settings.McpMetricsRefreshSeconds, 1, 3600) * 3));
-        var hasRecentSnapshot = _lastMcpTelemetryAt is { } lastSuccess &&
-            DateTimeOffset.Now - lastSuccess <= recentWindow;
-
-        if (hasRecentSnapshot && _consecutiveMcpTelemetryFailures < 3)
+        if (_lastMcpTelemetryAt.HasValue && _consecutiveMcpTelemetryFailures < 3)
         {
+            var age = FormatIdleDuration((long)(
+                DateTimeOffset.Now - _lastMcpTelemetryAt.Value).TotalMilliseconds);
             _sessionsItem.ToolTipText =
-                $"A telemetry refresh failed; keeping the last valid snapshot. {reason}";
+                $"Telemetry refresh failed; keeping the last valid snapshot ({age} old). {reason}";
             return;
         }
 
@@ -668,15 +798,35 @@ internal sealed class TrayApplicationContext : ApplicationContext
         UpdateNotifyTooltip();
     }
 
-    private static int ReadInt(System.Text.Json.JsonElement element, string propertyName) =>
-        element.TryGetProperty(propertyName, out var value) && value.TryGetInt32(out var result)
-            ? result
-            : 0;
+    private static int ReadInt(System.Text.Json.JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var value))
+        {
+            return 0;
+        }
 
-    private static long ReadLong(System.Text.Json.JsonElement element, string propertyName) =>
-        element.TryGetProperty(propertyName, out var value) && value.TryGetInt64(out var result)
-            ? result
-            : 0;
+        return value.ValueKind switch
+        {
+            System.Text.Json.JsonValueKind.Number when value.TryGetInt32(out var number) => number,
+            System.Text.Json.JsonValueKind.String when int.TryParse(value.GetString(), out var number) => number,
+            _ => 0,
+        };
+    }
+
+    private static long ReadLong(System.Text.Json.JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var value))
+        {
+            return 0;
+        }
+
+        return value.ValueKind switch
+        {
+            System.Text.Json.JsonValueKind.Number when value.TryGetInt64(out var number) => number,
+            System.Text.Json.JsonValueKind.String when long.TryParse(value.GetString(), out var number) => number,
+            _ => 0L,
+        };
+    }
 
     private static IReadOnlyList<McpSessionInfo> ReadSessionDetails(
         System.Text.Json.JsonElement root)
@@ -742,6 +892,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             var serverType = ReadString(connection, "serverType") ?? "UNKNOWN";
             var kind = ReadString(connection, "kind") ?? "UNKNOWN";
             var processId = connection.TryGetProperty("processId", out var processIdValue) &&
+                processIdValue.ValueKind == System.Text.Json.JsonValueKind.Number &&
                 processIdValue.TryGetInt32(out var pid)
                     ? pid
                     : (int?)null;
@@ -777,10 +928,16 @@ internal sealed class TrayApplicationContext : ApplicationContext
         IReadOnlyList<McpSessionInfo> sessions,
         IReadOnlyList<McpConnectionInfo> connections)
     {
-        _sessionsItem.ToolTipText = string.Empty;
+        var activeSessionCount = sessions.Count(
+            session => session.InFlightOperations > 0);
+
+        _sessionsItem.ToolTipText =
+            "Connections = downstream MetaMCP -> MCP server connections; " +
+            "Sessions = client -> MetaMCP sessions; " +
+            "Active = sessions with in-flight MCP operations.";
         SetActivityItem(
             _sessionsItem,
-            $"MCP: {sessions.Count} sessions | {connections.Count} connections",
+            $"Connections: {connections.Count} | Sessions: {sessions.Count} | Active: {activeSessionCount}",
             sessions.Count > 0 || connections.Count > 0 ? _greenDot : _grayDot);
         _sessionsItem.DropDownItems.Clear();
 
@@ -816,6 +973,18 @@ internal sealed class TrayApplicationContext : ApplicationContext
             var groupedConnections = serverGroup
                 .OrderBy(connection => connection.ProcessId ?? int.MaxValue)
                 .ToArray();
+            if (groupedConnections.Length == 1)
+            {
+                var connection = groupedConnections[0];
+                var linkedSessions = connection.SessionIds
+                    .Where(sessionById.ContainsKey)
+                    .Select(sessionId => sessionById[sessionId])
+                    .ToArray();
+                parent.DropDownItems.Add(CreateDisabledMenuItem(
+                    BuildConnectionLabel(connection, linkedSessions)));
+                continue;
+            }
+
             var countSuffix = groupedConnections.Length > 1
                 ? $" ×{groupedConnections.Length}"
                 : string.Empty;
@@ -840,32 +1009,47 @@ internal sealed class TrayApplicationContext : ApplicationContext
         }
     }
 
+    private static string BuildConnectionLabel(
+        McpConnectionInfo connection,
+        IReadOnlyList<McpSessionInfo> sessions)
+    {
+        var details = BuildConnectionEntryText(connection, sessions);
+        return $"{connection.ServerName} " +
+            $"[{FormatConnectionKind(connection.Kind)}] · {details}";
+    }
+
     private static string BuildConnectionEntryText(
         McpConnectionInfo connection,
         IReadOnlyList<McpSessionInfo> sessions)
     {
         var parts = new List<string>();
-        parts.Add(connection.ProcessId is int pid
-            ? $"PID {pid}"
-            : connection.ServerType);
+        if (connection.ProcessId is int pid)
+        {
+            parts.Add($"PID {pid}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(connection.ServerType))
+        {
+            parts.Add($"Transport {connection.ServerType}");
+        }
 
         if (connection.SessionIds.Length == 1)
         {
-            parts.Add($"session {ShortSessionId(connection.SessionIds[0])}");
+            parts.Add($"Session {ShortSessionId(connection.SessionIds[0])}");
         }
         else if (connection.SessionIds.Length > 1)
         {
-            parts.Add($"sessions {connection.SessionIds.Length}");
+            parts.Add($"Sessions {connection.SessionIds.Length}");
         }
 
         if (connection.InFlight > 0)
         {
-            parts.Add($"active {connection.InFlight}");
+            parts.Add($"Active {connection.InFlight}");
         }
 
         if (sessions.Count == 1)
         {
-            parts.Add($"idle {FormatIdleDuration(sessions[0].IdleMilliseconds)}");
+            parts.Add($"Idle {FormatIdleDuration(sessions[0].IdleMilliseconds)}");
         }
 
         return string.Join(" | ", parts);
@@ -885,10 +1069,10 @@ internal sealed class TrayApplicationContext : ApplicationContext
             .OrderBy(session => session.SessionId))
         {
             var activity = session.InFlightOperations > 0
-                ? $"active {session.InFlightOperations}"
-                : $"idle {FormatIdleDuration(session.IdleMilliseconds)}";
+                ? $"Active {session.InFlightOperations}"
+                : $"Idle {FormatIdleDuration(session.IdleMilliseconds)}";
             parent.DropDownItems.Add(CreateDisabledMenuItem(
-                $"Session {ShortSessionId(session.SessionId)} [no MCP] | {activity}"));
+                $"Session {ShortSessionId(session.SessionId)} [no MCP] · {activity}"));
         }
     }
 
@@ -948,7 +1132,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 : "unknown";
             SetActivityItem(
                 _sessionsItem,
-                $"MCP telemetry delayed | last: {sessions} sessions | {connections} connections",
+                $"MCP delayed · last {sessions} sessions / {connections} connections",
                 _yellowDot);
             _sessionsItem.ToolTipText =
                 $"Last successful telemetry: {age} ago. {reason}".Trim();
@@ -968,22 +1152,25 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private void UpdateStatusMenu(RuntimeStatus status)
     {
-        SetOverallItem(status.Overall);
-        SetComponentItem(_backendItem, "Backend", status.Backend);
-        SetComponentItem(_frontendItem, "Frontend", status.Frontend);
-        SetComponentItem(_databaseItem, "PostgreSQL", status.Database);
-        var mapping = ResolveMapping(status.ReverseSshMappingId);
-        SetComponentItem(
-            _sshItem,
-            mapping is null ? "Reverse SSH" : $"Reverse SSH [{mapping.DisplayName}]",
-            status.ReverseSsh);
+        _runtimeDesiredRunning = status.DesiredRunning;
+        SetOverallStatus(status.Overall);
+        SetComponentStatus(1, "Backend", status.Backend);
+        SetComponentStatus(2, "Frontend", status.Frontend);
+        SetComponentStatus(3, "PostgreSQL", status.Database);
+        SetComponentStatus(4, "Reverse SSH", status.ReverseSsh);
         UpdateMappingSelection(status.ReverseSshMappingId);
         _mappingItem.Enabled = !_busy && _settings.ReverseSsh.Enabled;
-        _startItem.Enabled = !_busy && !status.DesiredRunning;
+        _startRestartItem.Text = status.DesiredRunning ? "Restart" : "Start";
+        _startRestartItem.ToolTipText = status.DesiredRunning
+            ? "Restart MetaMCP runtime."
+            : "Start MetaMCP runtime.";
+        _startRestartItem.Enabled = !_busy;
         _stopItem.Enabled = !_busy && status.DesiredRunning;
-        _restartItem.Enabled = !_busy && status.DesiredRunning;
         _resetMcpConnectionsItem.Enabled = !_busy &&
             status.Backend == ComponentState.Online;
+        _resetReverseSshItem.Enabled = !_busy &&
+            status.DesiredRunning &&
+            _settings.ReverseSsh.Enabled;
 
         _backendOnline = status.Backend == ComponentState.Online;
         if (!_backendOnline)
@@ -996,7 +1183,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private void UpdateNotifyTooltip()
     {
-        UpdateModeMenu();
+        UpdateSummaryMenu();
         var status = GetOverallText(_lastOverallState);
         var connections = _lastConnectionCount ?? 0;
         var tooltip = _lastMcpMetrics is { } metrics
@@ -1021,6 +1208,13 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _generatedTrayIcon = nextIcon;
         _displayedTrayConnectionCount = normalizedCount;
         previousIcon?.Dispose();
+    }
+
+    private static string GetDisplayVersion()
+    {
+        var version = Application.ProductVersion;
+        var separator = version.IndexOf('+');
+        return separator >= 0 ? version[..separator] : version;
     }
 
     private static string FormatMemory(long bytes)
@@ -1059,39 +1253,42 @@ internal sealed class TrayApplicationContext : ApplicationContext
             : $"Tunnel: {mapping.DisplayName} ({mapping.PublicPath})";
     }
 
-    private void SetOverallItem(OverallState state)
+    private void SetOverallStatus(OverallState state)
     {
-        _overallItem.Text = $"Status: {GetOverallText(state)}";
-        _overallItem.Image = state switch
-        {
-            OverallState.Online => _greenDot,
-            OverallState.Starting or OverallState.Degraded => _yellowDot,
-            _ => _redDot,
-        };
+        _statusTable.SetRow(
+            0,
+            $"Status: {GetOverallText(state)}",
+            state switch
+            {
+                OverallState.Online => _greenDot,
+                OverallState.Starting or OverallState.Degraded => _yellowDot,
+                _ => _redDot,
+            });
     }
 
-    private void SetComponentItem(
-        ToolStripMenuItem item,
+    private void SetComponentStatus(
+        int row,
         string name,
         ComponentState state)
     {
-        item.Text = $"{name}: {GetComponentText(state)}";
-        item.Image = state switch
-        {
-            ComponentState.Online => _greenDot,
-            ComponentState.Starting => _yellowDot,
-            ComponentState.Disabled => _grayDot,
-            _ => _redDot,
-        };
+        _statusTable.SetRow(
+            row,
+            $"{name}: {GetComponentText(state)}",
+            state switch
+            {
+                ComponentState.Online => _greenDot,
+                ComponentState.Starting => _yellowDot,
+                ComponentState.Disabled => _grayDot,
+                _ => _redDot,
+            });
     }
 
-    private void UpdateModeMenu()
+    private void UpdateSummaryMenu()
     {
-        var mode = _serviceMode ? "Windows service" : "Portable";
         var connections = _lastConnectionCount ?? 0;
-        _modeItem.Text = _lastMcpMetrics is { } metrics
-            ? $"{mode} | MCP {connections} | CPU {metrics.CpuPercent:0.0}% | RAM {FormatMemory(metrics.WorkingSetBytes)}"
-            : $"{mode} | MCP {connections} | CPU -- | RAM --";
+        _summaryItem.Text = _lastMcpMetrics is { } metrics
+            ? $"MCP {connections} | CPU {metrics.CpuPercent:0.0}% | RAM {FormatMemory(metrics.WorkingSetBytes)}"
+            : $"MCP {connections} | CPU -- | RAM --";
         _installServiceItem.Visible = !_serviceMode;
         _uninstallServiceItem.Visible = _serviceMode;
     }
@@ -1122,10 +1319,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private void SetBusy(bool busy)
     {
         _busy = busy;
-        _startItem.Enabled = !busy;
+        _startRestartItem.Enabled = !busy;
         _stopItem.Enabled = !busy;
-        _restartItem.Enabled = !busy;
         _resetMcpConnectionsItem.Enabled = !busy && _backendOnline;
+        _resetReverseSshItem.Enabled = !busy &&
+            _runtimeDesiredRunning &&
+            _settings.ReverseSsh.Enabled;
         _mappingItem.Enabled = !busy && _settings.ReverseSsh.Enabled;
         _installServiceItem.Enabled = !busy;
         _uninstallServiceItem.Enabled = !busy;
@@ -1197,6 +1396,29 @@ internal sealed class TrayApplicationContext : ApplicationContext
             _redDot.Dispose();
             _grayDot.Dispose();
             ExitThread();
+        }
+    }
+
+    private void StretchTopLevelItems()
+    {
+        foreach (ToolStripItem item in _menu.Items)
+        {
+            if (item is ToolStripSeparator)
+            {
+                continue;
+            }
+
+            var left = Math.Max(0, item.Bounds.Left);
+            var width = Math.Max(1, _menu.ClientSize.Width - left - 2);
+            var preferredHeight = item.GetPreferredSize(new Size(width, 0)).Height;
+            item.AutoSize = false;
+            item.Size = new Size(width, Math.Max(22, preferredHeight));
+
+            if (item is ToolStripControlHost host)
+            {
+                host.Control.AutoSize = false;
+                host.Control.Size = new Size(width, Math.Max(1, preferredHeight));
+            }
         }
     }
 
@@ -1363,6 +1585,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             var newIcon = CreateJsonForCurrentTheme();
             var old = Interlocked.Exchange(ref _jsonIcon, newIcon);
             _openConfigItem.Image = newIcon;
+            _statusTable.ApplySystemColors();
             old?.Dispose();
         }
         catch { }

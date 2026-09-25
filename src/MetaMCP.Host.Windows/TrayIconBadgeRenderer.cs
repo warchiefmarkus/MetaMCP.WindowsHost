@@ -39,15 +39,15 @@ internal static class TrayIconBadgeRenderer
         using var badgePath = CreateRoundedRectangle(
             badgeBounds,
             Math.Min(badgeBounds.Width, badgeBounds.Height) / 2f);
-        using var badgeBrush = new SolidBrush(Color.FromArgb(255, 255, 45, 45));
-        using var outlinePen = new Pen(Color.White, 1.5f);
+        using var badgeBrush = new SolidBrush(Color.FromArgb(255, 235, 35, 35));
+        using var outlinePen = new Pen(Color.White, 1.75f);
         graphics.FillPath(badgeBrush, badgePath);
         graphics.DrawPath(outlinePen, badgePath);
 
         var fontSize = badgeText.Length switch
         {
-            1 => 16f,
-            2 => 13f,
+            1 => 17f,
+            2 => 13.5f,
             _ => 9.5f,
         };
         var fontFamily = SystemFonts.MessageBoxFont?.FontFamily
@@ -97,9 +97,9 @@ internal static class TrayIconBadgeRenderer
     private static RectangleF GetBadgeBounds(string badgeText) =>
         badgeText.Length switch
         {
-            1 => new RectangleF(12f, 0f, 20f, 20f),
-            2 => new RectangleF(9f, 0f, 23f, 19f),
-            _ => new RectangleF(4f, 0f, 28f, 18f),
+            1 => new RectangleF(10f, 0f, 22f, 22f),
+            2 => new RectangleF(7f, 0f, 25f, 20f),
+            _ => new RectangleF(2f, 0f, 30f, 19f),
         };
 
     private static GraphicsPath CreateRoundedRectangle(

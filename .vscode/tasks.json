@@ -2,13 +2,13 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Run: MetaMCP.Host.Windows (Release portable)",
+      "label": "Run: MetaMCP.Host.Windows (active A/B slot)",
       "type": "shell",
-      "command": "Release\\win-x64\\MetaMCP.exe",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${workspaceFolder}\\scripts\\Run-CurrentWindowsSlot.ps1\"",
       "group": "launch",
       "isBackground": true,
       "problemMatcher": [],
-      "detail": "Запускає готовий MetaMCP.exe з Release\\win-x64",
+      "detail": "Запускає active slot з current.json; до першої A/B міграції використовує legacy fallback",
       "presentation": {
         "reveal": "silent"
       }
@@ -16,40 +16,48 @@
     {
       "label": "Package: Select target",
       "type": "shell",
-      "command": "dotnet run --project src\\MetaMCP.Packager -c Release -- --repo C:\\DEV\\LLM\\metamcp --target ${input:packageTarget}",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${workspaceFolder}\\scripts\\Package-SelectedTarget.ps1\" -Target ${input:packageTarget}",
       "group": "build",
       "problemMatcher": [],
-      "detail": "Збирає вибраний платформний пакет"
+      "detail": "win-x64 → inactive A/B slot; Linux → Release platform directory"
     },
     {
       "label": "Package: Windows x64",
       "type": "shell",
-      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${workspaceFolder}\\.vscode\\scripts\\Package-AlternateWindowsRelease.ps1\"",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${workspaceFolder}\\scripts\\Build-WindowsCandidate.ps1\"",
       "group": "build",
       "problemMatcher": [],
-      "detail": "Почергово збирає неактивний слот: Release → Release2 або Release2 → Release"
+      "detail": "Збирає лише неактивний Windows A/B slot; live MetaMCP не перезапускається"
+    },
+    {
+      "label": "Deploy: Windows A/B safe switch",
+      "type": "shell",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${workspaceFolder}\\scripts\\Update-WindowsAB.ps1\"",
+      "group": "build",
+      "problemMatcher": [],
+      "detail": "Build candidate → delayed cmd cutover → health check → automatic rollback"
     },
     {
       "label": "Package: Linux x64",
       "type": "shell",
-      "command": "dotnet run --project src\\MetaMCP.Packager -c Release -- --repo C:\\DEV\\LLM\\metamcp --target linux-x64 --output Release\\linux-x64",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${workspaceFolder}\\scripts\\Package-SelectedTarget.ps1\" -Target linux-x64",
       "group": "build",
       "problemMatcher": []
     },
     {
       "label": "Package: Linux ARM64",
       "type": "shell",
-      "command": "dotnet run --project src\\MetaMCP.Packager -c Release -- --repo C:\\DEV\\LLM\\metamcp --target linux-arm64 --output Release\\linux-arm64",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${workspaceFolder}\\scripts\\Package-SelectedTarget.ps1\" -Target linux-arm64",
       "group": "build",
       "problemMatcher": []
     },
     {
       "label": "Package: All platforms",
       "type": "shell",
-      "command": "dotnet run --project src\\MetaMCP.Packager -c Release -- --repo C:\\DEV\\LLM\\metamcp --target all --output Release",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${workspaceFolder}\\scripts\\Package-SelectedTarget.ps1\" -Target all",
       "group": "build",
       "problemMatcher": [],
-      "detail": "Один production build, потім win-x64, linux-x64 та linux-arm64",
+      "detail": "Windows → inactive A/B slot; потім Linux x64 та ARM64 platform packages",
       "hide": true,
       "options": {
         "statusbar": {

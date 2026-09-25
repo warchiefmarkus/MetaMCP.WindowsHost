@@ -51,9 +51,20 @@
         "RemotePort": 18082,
         "LocalHost": "127.0.0.1",
         "LocalPort": 12008
+      },
+      {
+        "Id": "yoga",
+        "DisplayName": "Yoga",
+        "PublicPath": "/metamcpyoga",
+        "RemoteBindHost": "127.0.0.1",
+        "RemotePort": 18083,
+        "LocalHost": "127.0.0.1",
+        "LocalPort": 12008
       }
     ],
     "ConnectTimeoutSeconds": 15,
-    "ReconnectDelaySeconds": 10
+    "ReconnectDelaySeconds": 10,
+    "HealthProbeIntervalSeconds": 30,
+    "HealthProbeTimeoutSeconds": 5
   }
 }
