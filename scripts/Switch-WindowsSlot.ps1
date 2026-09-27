@@ -36,7 +36,7 @@ function Stop-AllMetaMcpHostsExcept([string]$exceptBase) {
     Get-CimInstance Win32_Process | Where-Object {
         $_.ExecutablePath -and
         $_.ExecutablePath.StartsWith($root, [StringComparison]::OrdinalIgnoreCase) -and
-        [IO.Path]::GetFileName($_.ExecutablePath) -match '^MetaMCP(?:[.]next|[.]prev)?[.]exe$' -and
+        [IO.Path]::GetFileName($_.ExecutablePath) -eq 'MetaMCP.exe' -and
         (-not $except -or -not $_.ExecutablePath.StartsWith($except, [StringComparison]::OrdinalIgnoreCase))
     } | ForEach-Object {
         try {
@@ -98,7 +98,7 @@ function Write-CurrentState($pending, [string]$candidateExe) {
 function Update-Shortcuts([string]$exe) {
     $ws = New-Object -ComObject WScript.Shell
     foreach ($shortcut in @(
-        (Join-Path $root 'MetaMCP Release.lnk'),
+        (Join-Path $root 'MetaMCP.lnk'),
         (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\MetaMCP.lnk')
     )) {
         if (-not (Test-Path $shortcut)) { continue }
@@ -107,150 +107,6 @@ function Update-Shortcuts([string]$exe) {
         $s.WorkingDirectory = Split-Path $exe -Parent
         $s.IconLocation = "$exe,0"
         $s.Save()
-    }
-}
-
-function Prepare-LegacyRollbackSlot($pending) {
-    if ($pending.previousSlot -in @('A','B')) { return $pending }
-    if ([string]::IsNullOrWhiteSpace([string]$pending.previousPath) -or
-        [string]::IsNullOrWhiteSpace([string]$pending.previousExecutable) -or
-        -not (Test-Path ([string]$pending.previousPath)) -or
-        -not (Test-Path ([string]$pending.previousExecutable))) {
-        return $pending
-    }
-
-    $rollbackSlot = if ([string]$pending.candidateSlot -eq 'B') { 'A' } else { 'B' }
-    $rollbackBase = Join-Path $root ("Release$rollbackSlot\\win-x64")
-    $rollbackExe = Join-Path $rollbackBase 'MetaMCP.exe'
-    if (Test-Path $rollbackBase) {
-        $running = @(Get-CimInstance Win32_Process | Where-Object {
-            $_.ExecutablePath -and $_.ExecutablePath.StartsWith($rollbackBase, [StringComparison]::OrdinalIgnoreCase)
-        })
-        if ($running.Count -gt 0) {
-            throw "Cannot seed rollback slot $rollbackSlot while it is running."
-        }
-        Remove-DirectoryRobust $rollbackBase
-    }
-    New-Item $rollbackBase -ItemType Directory -Force | Out-Null
-
-    $sourceBase = [string]$pending.previousPath
-    Log "Seeding rollback slot $rollbackSlot from legacy runtime $sourceBase"
-    & robocopy.exe $sourceBase $rollbackBase /MIR /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
-    $robocopyExit = $LASTEXITCODE
-    if ($robocopyExit -gt 7) {
-        throw "Failed to seed rollback slot $rollbackSlot; robocopy exit code $robocopyExit."
-    }
-
-    $previousName = [IO.Path]::GetFileName([string]$pending.previousExecutable)
-    $copiedPreviousExe = Join-Path $rollbackBase $previousName
-    if (-not (Test-Path $copiedPreviousExe)) {
-        throw "Rollback executable was not copied: $copiedPreviousExe"
-    }
-    if (-not $copiedPreviousExe.Equals($rollbackExe, [StringComparison]::OrdinalIgnoreCase)) {
-        Copy-Item $copiedPreviousExe $rollbackExe -Force
-    }
-    Get-ChildItem $rollbackBase -Filter 'MetaMCP.*.exe' -File -ErrorAction SilentlyContinue |
-        Where-Object { -not $_.FullName.Equals($rollbackExe, [StringComparison]::OrdinalIgnoreCase) } |
-        Remove-Item -Force -ErrorAction SilentlyContinue
-
-    $pending.previousSlot = $rollbackSlot
-    $pending.previousPath = $rollbackBase
-    $pending.previousExecutable = $rollbackExe
-    Log "Rollback slot seeded: $rollbackSlot -> $rollbackExe"
-    return $pending
-}
-
-function Test-ReservedDeviceName([string]$name) {
-    $baseName = [IO.Path]::GetFileNameWithoutExtension($name).TrimEnd(' ', '.')
-    return $baseName -match '^(?i:CON|PRN|AUX|NUL|CLOCK[$]|COM[1-9]|LPT[1-9])$'
-}
-
-function Remove-ReservedDeviceEntries([string]$basePath) {
-    if (-not (Test-Path $basePath)) { return }
-
-    $extendedRoot = '\\?\' + [IO.Path]::GetFullPath($basePath).TrimEnd('\')
-    $directories = [Collections.Generic.Stack[string]]::new()
-    $directories.Push($extendedRoot)
-
-    while ($directories.Count -gt 0) {
-        $directory = $directories.Pop()
-        foreach ($entry in [IO.Directory]::EnumerateFileSystemEntries($directory)) {
-            $name = [IO.Path]::GetFileName($entry)
-            $attributes = [IO.File]::GetAttributes($entry)
-            $isDirectory = ($attributes -band [IO.FileAttributes]::Directory) -ne 0
-            $isReparsePoint = ($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
-
-            if (Test-ReservedDeviceName $name) {
-                if ($isDirectory) {
-                    [IO.Directory]::Delete($entry, $true)
-                } else {
-                    [IO.File]::SetAttributes($entry, [IO.FileAttributes]::Normal)
-                    [IO.File]::Delete($entry)
-                }
-                Log "Removed reserved-name legacy entry: $entry"
-                continue
-            }
-
-            if ($isDirectory -and -not $isReparsePoint) {
-                $directories.Push($entry)
-            }
-        }
-    }
-}
-
-function Remove-DirectoryRobust([string]$path) {
-    if (-not (Test-Path $path)) { return }
-
-    try {
-        Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop
-    } catch {
-        Log "PowerShell removal failed for ${path}: $($_.Exception.Message); retrying with extended-path cleanup."
-        Remove-ReservedDeviceEntries $path
-        & cmd.exe /d /c "rd /s /q `"$path`""
-        $rdExit = $LASTEXITCODE
-        if ($rdExit -ne 0 -or (Test-Path $path)) {
-            throw "Failed to remove $path after reserved-name cleanup; rd exit code $rdExit."
-        }
-    }
-}
-
-function Cleanup-LegacyWindowsSlots($pending) {
-    if ($pending.previousSlot -notin @('A','B')) { return }
-
-    foreach ($legacyRoot in @(
-        (Join-Path $root 'Release'),
-        (Join-Path $root 'Release2')
-    )) {
-        $legacy = Join-Path $legacyRoot 'win-x64'
-        if (Test-Path $legacy) {
-            $running = @(Get-CimInstance Win32_Process | Where-Object {
-                $_.ExecutablePath -and $_.ExecutablePath.StartsWith($legacy, [StringComparison]::OrdinalIgnoreCase)
-            })
-            if ($running.Count -gt 0) {
-                Log "Legacy cleanup skipped; processes still run under $legacy"
-                continue
-            }
-
-            try {
-                Remove-DirectoryRobust $legacy
-                Log "Legacy Windows slot removed: $legacy"
-            } catch {
-                Log "Legacy cleanup failed for ${legacy}: $($_.Exception.Message)"
-                continue
-            }
-        }
-
-        if (Test-Path $legacyRoot) {
-            $remaining = @(Get-ChildItem -LiteralPath $legacyRoot -Force -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name -ne 'release-slot.json' })
-            if ($remaining.Count -eq 0) {
-                Remove-Item -LiteralPath (Join-Path $legacyRoot 'release-slot.json') -Force -ErrorAction SilentlyContinue
-                Remove-Item -LiteralPath $legacyRoot -Force -ErrorAction SilentlyContinue
-                if (-not (Test-Path $legacyRoot)) {
-                    Log "Empty legacy release root removed: $legacyRoot"
-                }
-            }
-        }
     }
 }
 
@@ -283,10 +139,8 @@ $candidate = Start-Process -FilePath $candidateExe -WorkingDirectory $candidateB
 Log "candidate started PID=$($candidate.Id)"
 
 if (Wait-Health $candidate $HealthTimeoutSeconds) {
-    $pending = Prepare-LegacyRollbackSlot $pending
     Write-CurrentState $pending $candidateExe
     Update-Shortcuts $candidateExe
-    Cleanup-LegacyWindowsSlots $pending
     if (-not $KeepPendingOnSuccess) {
         Remove-Item $pendingPath -Force -ErrorAction SilentlyContinue
     }

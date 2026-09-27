@@ -12,12 +12,15 @@ C:\DEV\LLM\
     ├── src\MetaMCP.Host.Windows\
     ├── src\MetaMCP.Host.Linux\
     ├── src\MetaMCP.Packager\
-    └── Release\
-        ├── win-x64\
-        ├── linux-x64\
-        ├── linux-x64.tar.gz
-        ├── linux-arm64\
-        └── linux-arm64.tar.gz
+    ├── scripts\
+    ├── ReleaseA\win-x64\
+    ├── ReleaseB\win-x64\
+    ├── Release\                 # Linux packages only
+    │   ├── linux-x64\
+    │   ├── linux-x64.tar.gz
+    │   ├── linux-arm64\
+    │   └── linux-arm64.tar.gz
+    └── current.json
 ```
 
 - `MetaMCP.Host.Core` — конфіг, runtime controller, health checks і reverse SSH.
@@ -29,12 +32,13 @@ Windows assembly і executable збережені як `MetaMCP` / `MetaMCP.exe`
 Linux executable має назву `metamcp-host`.
 ## Платформні пакети
 
+Windows x64 збирається тільки через A/B candidate builder:
+
 ```powershell
-dotnet run --project .\src\MetaMCP.Packager -c Release -- `
-  --repo C:\DEV\LLM\metamcp `
-  --target win-x64 `
-  --output Release\win-x64
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Build-WindowsCandidate.ps1
 ```
+
+Скрипт сам визначає неактивний `ReleaseA`/`ReleaseB` slot і не перезаписує live runtime.
 
 Доступні target-и:
 
@@ -57,20 +61,18 @@ dotnet run --project .\src\MetaMCP.Packager -c Release -- `
 Фінальний layout:
 
 ```text
-Release/
-├── win-x64/
-├── linux-x64/
+ReleaseA\win-x64\   # один Windows slot
+ReleaseB\win-x64\   # другий Windows slot
+Release\
+├── linux-x64\
 ├── linux-x64.tar.gz
-├── linux-arm64/
+├── linux-arm64\
 └── linux-arm64.tar.gz
 ```
 
-Окремі target-и пишуть у відповідний підкаталог. `--target all` використовує корінь `Release`.
-
 Windows package містить фізичний `node_modules` без junction/symbolic links, тому його можна переносити звичайним копіюванням або архівом. Packager окремо перевіряє наявність `pg`, `pg-types`, PostgreSQL parser dependencies і запуск database runtime modules.
 
-Для повторної збірки можна додати `--skip-install`.
-`--target all` виконує production build MetaMCP один раз і створює всі три пакети.
+`Package: All platforms` зберігає Windows у A/B схемі, а Linux artifacts — у `Release`.
 ## VS Code tasks
 
 У `.vscode/tasks.json` є:
@@ -108,16 +110,17 @@ active A → build B → validate → delayed cmd → stop A → start B → hea
 active B → build A → validate → delayed cmd → stop B → start A → health OK → atomic current.json=A
 ```
 
-Якщо candidate не проходить backend/frontend health-check, switch-скрипт завершує candidate і запускає попередній executable. Перший перехід зі старих `Release/Release2` навмисно йде в `ReleaseB`; legacy Windows release зберігається як rollback. Він видаляється лише після наступного успішного A/B переходу, коли rollback уже знаходиться в іншому A/B слоті.
+Якщо candidate не проходить backend/frontend health-check, switch-скрипт завершує candidate і запускає попередній A/B slot.
 
-Під час build у candidate переносяться runtime `config` і `data`; `host.json` merge-иться поверх нових default-полів. Старий `.vscode/scripts/Package-AlternateWindowsRelease.ps1` залишений лише як compatibility-wrapper до нового candidate builder.
+Під час build у candidate переносяться runtime `config` і `data`; `host.json` merge-иться поверх нових default-полів.
 
 ## Windows host
 
 Windows host запускається як portable tray application або Windows Service.
 
 ```text
-Release\win-x64\MetaMCP.exe
+current.json → ReleaseA\win-x64\MetaMCP.exe
+             або ReleaseB\win-x64\MetaMCP.exe
 ```
 
 Tray дозволяє:

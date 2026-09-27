@@ -5,16 +5,9 @@ current.json
 pending-update.json
 work/
 .host-publish/
-.package-staging/
 .linux-app-staging/
 .node-runtime-cache/
-.host-publish-final/
-.host-publish-test/
-.host-publish-recovery/
 .packager-data-backup/
-.deploy-hoisted-test/
-.normalize-test-moved/
-.portable-link-test/
 packager.out.log
 packager.err.log
 packager.pid

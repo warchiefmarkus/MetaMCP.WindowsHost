@@ -36,7 +36,7 @@ switch ($Target) {
         Build-LinuxTarget 'linux-arm64'
     }
     'all' {
-        # Keep Windows on the A/B deployment path instead of recreating legacy Release\win-x64.
+        # Keep Windows on the A/B deployment path; Linux artifacts remain under Release.
         Build-WindowsCandidate
         Build-LinuxTarget 'linux-x64'
         Build-LinuxTarget 'linux-arm64'

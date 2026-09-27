@@ -93,7 +93,7 @@ if (-not $activeSlot -and (Test-Path $currentPath)) {
     }
 }
 
-# First migration from legacy Release/Release2 intentionally lands on B.
+# Bootstrap without an existing A/B state intentionally lands on B.
 $targetSlot = if ($activeSlot -eq 'B') { 'A' } else { 'B' }
 $targetBase = $slotPaths[$targetSlot]
 $targetExe = Join-Path $targetBase 'MetaMCP.exe'
@@ -106,7 +106,7 @@ if ($targetRunning.Count -gt 0) {
 }
 
 Write-Host "Active host: $(if($activeExe){$activeExe}else{'none'})"
-Write-Host "Logical active slot: $(if($activeSlot){$activeSlot}else{'legacy/none'})"
+Write-Host "Logical active slot: $(if($activeSlot){$activeSlot}else{'none/bootstrap'})"
 Write-Host "Candidate slot: $targetSlot"
 Write-Host "Candidate output: $targetBase"
 

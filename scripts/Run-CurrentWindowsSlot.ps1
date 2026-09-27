@@ -5,25 +5,25 @@ $ErrorActionPreference = 'Stop'
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $currentPath = Join-Path $root 'current.json'
 
-$exe = $null
-if (Test-Path $currentPath) {
-    $state = Get-Content $currentPath -Raw | ConvertFrom-Json
-    if ($state.activeExecutable -and (Test-Path ([string]$state.activeExecutable))) {
-        $exe = [string]$state.activeExecutable
-    }
+if (-not (Test-Path $currentPath)) {
+    throw "A/B state file is missing: $currentPath. Build and deploy a Windows slot first."
 }
 
-if (-not $exe) {
-    foreach ($candidate in @(
-        (Join-Path $root 'ReleaseB\win-x64\MetaMCP.exe'),
-        (Join-Path $root 'ReleaseA\win-x64\MetaMCP.exe'),
-        (Join-Path $root 'Release2\win-x64\MetaMCP.exe'),
-        (Join-Path $root 'Release\win-x64\MetaMCP.exe')
-    )) {
-        if (Test-Path $candidate) { $exe = $candidate; break }
-    }
+$state = Get-Content $currentPath -Raw | ConvertFrom-Json
+if ($state.activeSlot -notin @('A','B')) {
+    throw "Invalid activeSlot in current.json: $($state.activeSlot)"
 }
 
-if (-not $exe) { throw 'No runnable Windows MetaMCP release was found.' }
-Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe -Parent)
-Write-Host "Started: $exe"
+$expectedBase = Join-Path $root ("Release$($state.activeSlot)\win-x64")
+$expectedExe = Join-Path $expectedBase 'MetaMCP.exe'
+$configuredExe = [string]$state.activeExecutable
+if ([string]::IsNullOrWhiteSpace($configuredExe) -or
+    -not [IO.Path]::GetFullPath($configuredExe).Equals([IO.Path]::GetFullPath($expectedExe), [StringComparison]::OrdinalIgnoreCase)) {
+    throw "current.json activeExecutable does not match activeSlot $($state.activeSlot)."
+}
+if (-not (Test-Path $expectedExe)) {
+    throw "Active A/B executable is missing: $expectedExe"
+}
+
+Start-Process -FilePath $expectedExe -WorkingDirectory $expectedBase
+Write-Host "Started active slot $($state.activeSlot): $expectedExe"
