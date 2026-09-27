@@ -158,7 +158,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             async (_, _) => await UninstallServiceAsync());
         _menu.Items.AddRange([_installServiceItem, _uninstallServiceItem]);
         _menu.Items.Add(new ToolStripSeparator());
-        _menu.Items.Add(new ToolStripMenuItem($"Version: {GetDisplayVersion()}")
+        _menu.Items.Add(new ToolStripMenuItem($"Version: {GetDisplayVersion()} · {GetLaunchFolderDisplayName()}")
         {
             Enabled = false,
         });
@@ -1215,6 +1215,23 @@ internal sealed class TrayApplicationContext : ApplicationContext
         var version = Application.ProductVersion;
         var separator = version.IndexOf('+');
         return separator >= 0 ? version[..separator] : version;
+    }
+
+    private static string GetLaunchFolderDisplayName()
+    {
+        var executableDirectory = Path.GetDirectoryName(Application.ExecutablePath);
+        if (string.IsNullOrWhiteSpace(executableDirectory))
+        {
+            return "unknown";
+        }
+
+        var leaf = new DirectoryInfo(executableDirectory);
+        if (leaf.Name.Equals("win-x64", StringComparison.OrdinalIgnoreCase) && leaf.Parent is not null)
+        {
+            return $"{leaf.Parent.Name}\\{leaf.Name}";
+        }
+
+        return leaf.Name;
     }
 
     private static string FormatMemory(long bytes)
