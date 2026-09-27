@@ -24,7 +24,7 @@ C:\DEV\LLM\
 ```
 
 - `MetaMCP.Host.Core` — конфіг, runtime controller, health checks і reverse SSH.
-- `MetaMCP.Host.Windows` — tray UI, Windows Service, named pipe і Job Object.
+- `MetaMCP.Host.Windows` — portable tray UI, `RuntimeController` і Windows Job Object.
 - `MetaMCP.Host.Linux` — консольний host для systemd без GUI.
 - `MetaMCP.Packager` — пакети `win-x64`, `linux-x64` та `linux-arm64`.
 
@@ -116,7 +116,7 @@ active B → build A → validate → delayed cmd → stop B → start A → hea
 
 ## Windows host
 
-Windows host запускається як portable tray application або Windows Service.
+Windows host запускається тільки як portable tray application.
 
 ```text
 current.json → ReleaseA\win-x64\MetaMCP.exe
@@ -127,14 +127,13 @@ Tray дозволяє:
 
 - запускати, зупиняти й перезапускати runtime;
 - виконувати `Reset MCP connections`: закривати всі downstream MCP connections/process trees без зупинки backend, frontend і SSH tunnel; якщо backend не відповідає, Host пропонує повний restart runtime;
-- встановлювати або видаляти Windows Service;
 - перемикати активний reverse SSH mapping без restart frontend/backend;
 - показувати компактне дерево `Connections: N | Sessions: M`: без проміжних `persistent/session/idle` і `Client sessions` меню; один сервер одразу містить PID, transport, короткий session ID, active request count та idle time, а кілька однакових серверів групуються як `dc [session] ×8`; client sessions без downstream connection показуються окремим leaf `Session … [no MCP]`;
 - показувати у верхньому рядку tray-меню агреговані метрики у форматі `MCP 3 | CPU 4,2% | RAM 386 MB`; `MCP` — кількість поточних `MetaMCP → MCP connections`;
 - показувати в нативному tooltip при наведенні на tray icon ті самі CPU, Working Set RAM і кількість MCP connections;
 - показувати у правому верхньому куті tray icon червоний badge з кількістю поточних `MetaMCP → MCP connections`; при `0` badge не відображається, значення понад `99` показується як `99+`;
 - відкривати конфіг і локальний UI.
-У portable mode backend і frontend входять у Windows Job Object з `KILL_ON_JOB_CLOSE`; `Stop`, `Restart`, `Exit` і аварійне завершення Host прибирають їхні дочірні MCP process trees. STDIO transport додатково виконує `taskkill /T /F` під час штатного закриття connection. У service mode використовується той самий `RuntimeController`, а tray працює як локальний клієнт через named pipe.
+Backend і frontend входять у Windows Job Object з `KILL_ON_JOB_CLOSE`; `Stop`, `Restart`, `Exit` і аварійне завершення Host прибирають їхні дочірні MCP process trees. STDIO transport додатково виконує `taskkill /T /F` під час штатного закриття connection.
 
 Ручне завершення всіх `node.exe` не рекомендується: разом із MCP servers воно вбиває MetaMCP backend і frontend. У такому стані tray показує `MCP: backend unavailable` або зберігає останні дані як `MCP telemetry delayed`.
 

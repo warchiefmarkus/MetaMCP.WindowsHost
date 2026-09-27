@@ -29,7 +29,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly string _baseDirectory;
     private HostSettings _settings;
     private RuntimeController? _portableRuntime;
-    private bool _serviceMode;
     private readonly NotifyIcon _notifyIcon;
     private readonly Icon _applicationIcon;
     private readonly ContextMenuStrip _menu;
@@ -44,8 +43,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _stopItem;
     private readonly ToolStripMenuItem _resetMcpConnectionsItem;
     private readonly ToolStripMenuItem _resetReverseSshItem;
-    private readonly ToolStripMenuItem _installServiceItem;
-    private readonly ToolStripMenuItem _uninstallServiceItem;
     private readonly ToolStripMenuItem _openWebItem;
     private readonly ToolStripMenuItem _openConfigItem;
     private readonly System.Windows.Forms.Timer _timer;
@@ -80,7 +77,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
         SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext());
         _settings = HostSettings.Load(_baseDirectory);
         HostLog.Initialize(_baseDirectory, _settings.LoggingEnabled);
-        _serviceMode = ServiceInstaller.IsInstalled();
 
         _applicationIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath)
             ?? (Icon)SystemIcons.Application.Clone();
@@ -148,16 +144,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _menu.Items.Add(_resetMcpConnectionsItem);
         _menu.Items.Add(_resetReverseSshItem);
         _menu.Items.Add(new ToolStripSeparator());
-        _installServiceItem = new ToolStripMenuItem(
-            "Install Windows Service",
-            null,
-            async (_, _) => await InstallServiceAsync());
-        _uninstallServiceItem = new ToolStripMenuItem(
-            "Uninstall Windows Service",
-            null,
-            async (_, _) => await UninstallServiceAsync());
-        _menu.Items.AddRange([_installServiceItem, _uninstallServiceItem]);
-        _menu.Items.Add(new ToolStripSeparator());
         _menu.Items.Add(new ToolStripMenuItem($"Version: {GetDisplayVersion()} · {GetLaunchFolderDisplayName()}")
         {
             Enabled = false,
@@ -212,12 +198,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
     {
         try
         {
-            if (_serviceMode)
-            {
-                await RefreshAsync();
-                return;
-            }
-
             CreatePortableRuntime();
             if (_settings.AutoStartRuntime)
             {
@@ -268,23 +248,13 @@ internal sealed class TrayApplicationContext : ApplicationContext
     {
         await RunBusyAsync(async () =>
         {
-            RuntimeStatus status;
-            if (_serviceMode)
-            {
-                var response = await PipeClient.SendAsync(
-                    PipeCommands.SelectMapping,
-                    timeout: TimeSpan.FromSeconds(20),
-                    mappingId: mappingId);
-                EnsurePipeSuccess(response);
-                status = response.Status!;
-                _settings = HostSettings.Load(_baseDirectory);
-                BuildMappingMenu();
-            }
-            else
-            {
-                _portableRuntime ??= new RuntimeController(_baseDirectory, _settings, new WindowsRuntimePlatform());
-                status = await _portableRuntime.SwitchReverseSshMappingAsync(mappingId);
-            }
+            _portableRuntime ??= new RuntimeController(
+                _baseDirectory,
+                _settings,
+                new WindowsRuntimePlatform());
+            var status = await _portableRuntime.SwitchReverseSshMappingAsync(mappingId);
+            _settings = HostSettings.Load(_baseDirectory);
+            BuildMappingMenu();
 
             UpdateStatusMenu(status);
             var mapping = _settings.ReverseSsh.GetMapping(mappingId);
@@ -294,7 +264,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 ToolTipIcon.Info);
         }, "Could not change reverse SSH mapping");
     }
-
     private async Task StartOrRestartRuntimeAsync()
     {
         var shouldRestart = _runtimeDesiredRunning;
@@ -315,31 +284,17 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private async Task StartRuntimeCoreAsync()
     {
-        if (_serviceMode)
-        {
-            var response = await PipeClient.SendAsync(PipeCommands.Start);
-            EnsurePipeSuccess(response);
-        }
-        else
-        {
-            _portableRuntime ??= new RuntimeController(
-                _baseDirectory,
-                _settings,
-                new WindowsRuntimePlatform());
-            await _portableRuntime.StartAsync();
-        }
+        _portableRuntime ??= new RuntimeController(
+            _baseDirectory,
+            _settings,
+            new WindowsRuntimePlatform());
+        await _portableRuntime.StartAsync();
     }
-
     private async Task StopRuntimeAsync()
     {
         await RunBusyAsync(async () =>
         {
-            if (_serviceMode)
-            {
-                var response = await PipeClient.SendAsync(PipeCommands.Stop);
-                EnsurePipeSuccess(response);
-            }
-            else if (_portableRuntime is not null)
+            if (_portableRuntime is not null)
             {
                 await _portableRuntime.StopAsync();
             }
@@ -347,26 +302,14 @@ internal sealed class TrayApplicationContext : ApplicationContext
             await RefreshAsync();
         }, "Stop failed");
     }
-
     private async Task RestartRuntimeCoreAsync()
     {
-        if (_serviceMode)
-        {
-            var response = await PipeClient.SendAsync(
-                PipeCommands.Restart,
-                TimeSpan.FromSeconds(120));
-            EnsurePipeSuccess(response);
-        }
-        else
-        {
-            _portableRuntime ??= new RuntimeController(
-                _baseDirectory,
-                _settings,
-                new WindowsRuntimePlatform());
-            await _portableRuntime.RestartAsync();
-        }
+        _portableRuntime ??= new RuntimeController(
+            _baseDirectory,
+            _settings,
+            new WindowsRuntimePlatform());
+        await _portableRuntime.RestartAsync();
     }
-
 
     private async Task ResetMcpConnectionsAsync()
     {
@@ -472,122 +415,23 @@ internal sealed class TrayApplicationContext : ApplicationContext
         await RunBusyAsync(async () =>
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
-            RuntimeStatus status;
-            string summary;
-            if (_serviceMode)
-            {
-                var response = await PipeClient.SendAsync(
-                    PipeCommands.ResetReverseSsh,
-                    TimeSpan.FromSeconds(120),
-                    timeout.Token);
-                EnsurePipeSuccess(response);
-                status = response.Status!;
-                summary = response.Message ??
-                    $"{mapping.DisplayName}: Reverse SSH reset completed.";
-                _settings = HostSettings.Load(_baseDirectory);
-                BuildMappingMenu();
-            }
-            else
-            {
-                _portableRuntime ??= new RuntimeController(
-                    _baseDirectory,
-                    _settings,
-                    new WindowsRuntimePlatform());
-                var result = await _portableRuntime.ResetReverseSshAsync(timeout.Token);
-                status = await _portableRuntime.RefreshStatusAsync(timeout.Token);
-                summary = result.Summary;
-            }
+            _portableRuntime ??= new RuntimeController(
+                _baseDirectory,
+                _settings,
+                new WindowsRuntimePlatform());
+            var result = await _portableRuntime.ResetReverseSshAsync(timeout.Token);
+            var status = await _portableRuntime.RefreshStatusAsync(timeout.Token);
 
             UpdateStatusMenu(status);
             ShowBalloon(
                 "Reverse SSH technical reset",
-                summary + " Tunnel is online.",
+                result.Summary + " Tunnel is online.",
                 status.ReverseSsh == ComponentState.Online
                     ? ToolTipIcon.Info
                     : ToolTipIcon.Warning);
             await RefreshAsync();
         }, "Reverse SSH technical reset failed");
     }
-
-    private async Task InstallServiceAsync()
-    {
-        if (_serviceMode || _busy)
-        {
-            return;
-        }
-
-        await RunBusyAsync(async () =>
-        {
-            if (_portableRuntime is not null)
-            {
-                await _portableRuntime.StopAsync();
-                await _portableRuntime.DisposeAsync();
-                _portableRuntime = null;
-            }
-
-            var exitCode = await ServiceInstaller.RunElevatedAsync("--install-service");
-            if (exitCode == 1223)
-            {
-                CreatePortableRuntime();
-                await _portableRuntime!.StartAsync();
-                return;
-            }
-            if (exitCode != 0)
-            {
-                throw new InvalidOperationException(
-                    $"Service installer exited with code {exitCode}.");
-            }
-
-            _serviceMode = true;
-            UpdateSummaryMenu();
-            await WaitForPipeAsync(TimeSpan.FromSeconds(30));
-            await RefreshAsync();
-            ShowBalloon(
-                "MetaMCP service installed",
-                "The service starts with Windows. The tray icon starts after sign-in.",
-                ToolTipIcon.Info);
-        }, "Service installation failed");
-    }
-
-    private async Task UninstallServiceAsync()
-    {
-        if (!_serviceMode || _busy)
-        {
-            return;
-        }
-
-        await RunBusyAsync(async () =>
-        {
-            try
-            {
-                await PipeClient.SendAsync(PipeCommands.Stop, TimeSpan.FromSeconds(15));
-            }
-            catch
-            {
-            }
-
-            var exitCode = await ServiceInstaller.RunElevatedAsync("--uninstall-service");
-            if (exitCode == 1223)
-            {
-                return;
-            }
-            if (exitCode != 0)
-            {
-                throw new InvalidOperationException(
-                    $"Service uninstaller exited with code {exitCode}.");
-            }
-
-            _serviceMode = false;
-            UpdateSummaryMenu();
-            CreatePortableRuntime();
-            if (_settings.AutoStartRuntime)
-            {
-                await _portableRuntime!.StartAsync();
-            }
-            await RefreshAsync();
-        }, "Service removal failed");
-    }
-
     private async Task RefreshAsync()
     {
         if (_exiting)
@@ -597,30 +441,11 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
         try
         {
-            RuntimeStatus status;
-            if (_serviceMode)
-            {
-                if (!ServiceInstaller.IsInstalled())
-                {
-                    _serviceMode = false;
-                    UpdateSummaryMenu();
-                    CreatePortableRuntime();
-                    status = await _portableRuntime!.RefreshStatusAsync();
-                }
-                else
-                {
-                    var response = await PipeClient.SendAsync(
-                        PipeCommands.Status,
-                        TimeSpan.FromSeconds(3));
-                    EnsurePipeSuccess(response);
-                    status = response.Status!;
-                }
-            }
-            else
-            {
-                _portableRuntime ??= new RuntimeController(_baseDirectory, _settings, new WindowsRuntimePlatform());
-                status = await _portableRuntime.RefreshStatusAsync();
-            }
+            _portableRuntime ??= new RuntimeController(
+                _baseDirectory,
+                _settings,
+                new WindowsRuntimePlatform());
+            var status = await _portableRuntime.RefreshStatusAsync();
 
             UpdateStatusMenu(status);
             if (status.Backend == ComponentState.Online &&
@@ -636,9 +461,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
         }
         catch (Exception ex)
         {
-            var serviceError = _serviceMode
-                ? "Windows service is unavailable."
-                : ex.Message;
             UpdateStatusMenu(new RuntimeStatus(
                 false,
                 ComponentState.Offline,
@@ -648,13 +470,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 _settings.ReverseSsh.ActiveMapping,
                 null,
                 null,
-                serviceError,
+                ex.Message,
                 DateTimeOffset.Now));
             SetConnectionCountsUnavailable();
             SetMcpMetricsUnavailable();
         }
     }
-
     private async Task RefreshMcpTelemetryAsync()
     {
         if (_exiting || _mcpTelemetryRefreshInProgress)
@@ -1306,8 +1127,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _summaryItem.Text = _lastMcpMetrics is { } metrics
             ? $"MCP {connections} | CPU {metrics.CpuPercent:0.0}% | RAM {FormatMemory(metrics.WorkingSetBytes)}"
             : $"MCP {connections} | CPU -- | RAM --";
-        _installServiceItem.Visible = !_serviceMode;
-        _uninstallServiceItem.Visible = _serviceMode;
     }
 
     private async Task RunBusyAsync(Func<Task> action, string errorTitle)
@@ -1343,32 +1162,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
             _runtimeDesiredRunning &&
             _settings.ReverseSsh.Enabled;
         _mappingItem.Enabled = !busy && _settings.ReverseSsh.Enabled;
-        _installServiceItem.Enabled = !busy;
-        _uninstallServiceItem.Enabled = !busy;
-    }
-
-    private async Task WaitForPipeAsync(TimeSpan timeout)
-    {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            try
-            {
-                var response = await PipeClient.SendAsync(
-                    PipeCommands.Status,
-                    TimeSpan.FromSeconds(2));
-                if (response.Success)
-                {
-                    return;
-                }
-            }
-            catch
-            {
-            }
-            await Task.Delay(500);
-        }
-
-        throw new TimeoutException("The Windows service did not open its control pipe.");
     }
 
     private async Task ExitAsync()
@@ -1383,7 +1176,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _mcpMetricsTimer.Stop();
         try
         {
-            if (!_serviceMode && _portableRuntime is not null)
+            if (_portableRuntime is not null)
             {
                 await _portableRuntime.StopAsync();
                 await _portableRuntime.DisposeAsync();
@@ -1462,14 +1255,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
         {
             UseShellExecute = true,
         });
-    }
-
-    private static void EnsurePipeSuccess(PipeResponse response)
-    {
-        if (!response.Success || response.Status is null)
-        {
-            throw new InvalidOperationException(response.Error ?? "The service command failed.");
-        }
     }
 
     private void ShowError(string title, string message)
