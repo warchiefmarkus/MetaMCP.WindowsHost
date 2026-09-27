@@ -129,7 +129,7 @@ function Prepare-LegacyRollbackSlot($pending) {
         if ($running.Count -gt 0) {
             throw "Cannot seed rollback slot $rollbackSlot while it is running."
         }
-        Remove-Item $rollbackBase -Recurse -Force
+        Remove-DirectoryRobust $rollbackBase
     }
     New-Item $rollbackBase -ItemType Directory -Force | Out-Null
 
@@ -160,25 +160,96 @@ function Prepare-LegacyRollbackSlot($pending) {
     return $pending
 }
 
+function Test-ReservedDeviceName([string]$name) {
+    $baseName = [IO.Path]::GetFileNameWithoutExtension($name).TrimEnd(' ', '.')
+    return $baseName -match '^(?i:CON|PRN|AUX|NUL|CLOCK[$]|COM[1-9]|LPT[1-9])$'
+}
+
+function Remove-ReservedDeviceEntries([string]$basePath) {
+    if (-not (Test-Path $basePath)) { return }
+
+    $extendedRoot = '\\?\' + [IO.Path]::GetFullPath($basePath).TrimEnd('\')
+    $directories = [Collections.Generic.Stack[string]]::new()
+    $directories.Push($extendedRoot)
+
+    while ($directories.Count -gt 0) {
+        $directory = $directories.Pop()
+        foreach ($entry in [IO.Directory]::EnumerateFileSystemEntries($directory)) {
+            $name = [IO.Path]::GetFileName($entry)
+            $attributes = [IO.File]::GetAttributes($entry)
+            $isDirectory = ($attributes -band [IO.FileAttributes]::Directory) -ne 0
+            $isReparsePoint = ($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+
+            if (Test-ReservedDeviceName $name) {
+                if ($isDirectory) {
+                    [IO.Directory]::Delete($entry, $true)
+                } else {
+                    [IO.File]::SetAttributes($entry, [IO.FileAttributes]::Normal)
+                    [IO.File]::Delete($entry)
+                }
+                Log "Removed reserved-name legacy entry: $entry"
+                continue
+            }
+
+            if ($isDirectory -and -not $isReparsePoint) {
+                $directories.Push($entry)
+            }
+        }
+    }
+}
+
+function Remove-DirectoryRobust([string]$path) {
+    if (-not (Test-Path $path)) { return }
+
+    try {
+        Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop
+    } catch {
+        Log "PowerShell removal failed for ${path}: $($_.Exception.Message); retrying with extended-path cleanup."
+        Remove-ReservedDeviceEntries $path
+        & cmd.exe /d /c "rd /s /q `"$path`""
+        $rdExit = $LASTEXITCODE
+        if ($rdExit -ne 0 -or (Test-Path $path)) {
+            throw "Failed to remove $path after reserved-name cleanup; rd exit code $rdExit."
+        }
+    }
+}
+
 function Cleanup-LegacyWindowsSlots($pending) {
     if ($pending.previousSlot -notin @('A','B')) { return }
-    foreach ($legacy in @(
-        (Join-Path $root 'Release\\win-x64'),
-        (Join-Path $root 'Release2\\win-x64')
+
+    foreach ($legacyRoot in @(
+        (Join-Path $root 'Release'),
+        (Join-Path $root 'Release2')
     )) {
-        if (-not (Test-Path $legacy)) { continue }
-        $running = @(Get-CimInstance Win32_Process | Where-Object {
-            $_.ExecutablePath -and $_.ExecutablePath.StartsWith($legacy, [StringComparison]::OrdinalIgnoreCase)
-        })
-        if ($running.Count -gt 0) {
-            Log "Legacy cleanup skipped; processes still run under $legacy"
-            continue
+        $legacy = Join-Path $legacyRoot 'win-x64'
+        if (Test-Path $legacy) {
+            $running = @(Get-CimInstance Win32_Process | Where-Object {
+                $_.ExecutablePath -and $_.ExecutablePath.StartsWith($legacy, [StringComparison]::OrdinalIgnoreCase)
+            })
+            if ($running.Count -gt 0) {
+                Log "Legacy cleanup skipped; processes still run under $legacy"
+                continue
+            }
+
+            try {
+                Remove-DirectoryRobust $legacy
+                Log "Legacy Windows slot removed: $legacy"
+            } catch {
+                Log "Legacy cleanup failed for ${legacy}: $($_.Exception.Message)"
+                continue
+            }
         }
-        try {
-            Remove-Item $legacy -Recurse -Force
-            Log "Legacy Windows slot removed: $legacy"
-        } catch {
-            Log "Legacy cleanup failed for ${legacy}: $($_.Exception.Message)"
+
+        if (Test-Path $legacyRoot) {
+            $remaining = @(Get-ChildItem -LiteralPath $legacyRoot -Force -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -ne 'release-slot.json' })
+            if ($remaining.Count -eq 0) {
+                Remove-Item -LiteralPath (Join-Path $legacyRoot 'release-slot.json') -Force -ErrorAction SilentlyContinue
+                Remove-Item -LiteralPath $legacyRoot -Force -ErrorAction SilentlyContinue
+                if (-not (Test-Path $legacyRoot)) {
+                    Log "Empty legacy release root removed: $legacyRoot"
+                }
+            }
         }
     }
 }
