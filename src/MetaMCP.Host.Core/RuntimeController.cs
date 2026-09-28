@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 
@@ -7,11 +7,15 @@ namespace MetaMCP.Host;
 internal sealed class RuntimeController : IAsyncDisposable
 {
     private readonly string _baseDirectory;
+    private readonly string _stateDirectory;
     private readonly HostSettings _settings;
     private readonly RuntimeLayout _layout;
     private readonly Dictionary<string, string> _environment;
     private readonly IRuntimePlatform _platform;
     private readonly ReverseSshTunnel _tunnel;
+    private readonly int _backendPort;
+    private readonly int _frontendPort;
+    private readonly bool _manageReverseSsh;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly object _statusSync = new();
     private readonly HttpClient _http = new() { Timeout = Timeout.InfiniteTimeSpan };
@@ -32,20 +36,50 @@ internal sealed class RuntimeController : IAsyncDisposable
     private string? _lastError;
 
     public RuntimeController(string baseDirectory, HostSettings settings, IRuntimePlatform platform)
+        : this(
+            baseDirectory,
+            baseDirectory,
+            settings,
+            platform,
+            settings.BackendPort,
+            settings.FrontendPort,
+            manageReverseSsh: true)
+    {
+    }
+
+    public RuntimeController(
+        string baseDirectory,
+        string stateDirectory,
+        HostSettings settings,
+        IRuntimePlatform platform,
+        int backendPort,
+        int frontendPort,
+        bool manageReverseSsh)
     {
         _baseDirectory = baseDirectory;
+        _stateDirectory = stateDirectory;
         _settings = settings;
         _platform = platform;
-        _layout = new RuntimeLayout(baseDirectory, platform.NodeExecutableRelativePath);
+        _backendPort = backendPort;
+        _frontendPort = frontendPort;
+        _manageReverseSsh = manageReverseSsh;
+        _layout = new RuntimeLayout(
+            baseDirectory,
+            platform.NodeExecutableRelativePath,
+            stateDirectory);
         _environment = EnvFile.Load(_layout.EnvironmentFile);
         PrepareEnvironment();
         _tunnel = new ReverseSshTunnel(settings.ReverseSsh);
         _tunnel.StateChanged += () => _ = RefreshStatusAsync();
         _status = RuntimeStatus.Stopped(
-            settings.ReverseSsh.Enabled,
+            manageReverseSsh && settings.ReverseSsh.Enabled,
             settings.ReverseSsh.ActiveMapping);
         _monitorTask = Task.Run(() => MonitorLoopAsync(_lifetime.Token));
     }
+
+    public int BackendPort => _backendPort;
+    public int FrontendPort => _frontendPort;
+    public bool DesiredRunning => _desiredRunning;
 
     public event Action<RuntimeStatus>? StatusChanged;
 
@@ -153,12 +187,15 @@ internal sealed class RuntimeController : IAsyncDisposable
             }
 
             _settings.ReverseSsh.ActiveMapping = mapping.Id;
-            _settings.Save(_baseDirectory);
+            _settings.Save(_stateDirectory);
 
-            await _tunnel.StopAsync();
-            if (_desiredRunning && _settings.ReverseSsh.Enabled)
+            if (_manageReverseSsh)
             {
-                _tunnel.Start();
+                await _tunnel.StopAsync();
+                if (_desiredRunning && _settings.ReverseSsh.Enabled)
+                {
+                    _tunnel.Start();
+                }
             }
 
             _lastError = null;
@@ -181,6 +218,12 @@ internal sealed class RuntimeController : IAsyncDisposable
             {
                 throw new InvalidOperationException(
                     "MetaMCP runtime must be running before resetting Reverse SSH.");
+            }
+
+            if (!_manageReverseSsh)
+            {
+                throw new InvalidOperationException(
+                    "This runtime does not own the Reverse SSH tunnel.");
             }
 
             if (!_settings.ReverseSsh.Enabled)
@@ -224,13 +267,13 @@ internal sealed class RuntimeController : IAsyncDisposable
             cancellationToken);
         var backendTask = IsAlive(_backend)
             ? CheckHttpAsync(
-                $"http://127.0.0.1:{_settings.BackendPort}/health",
+                $"http://127.0.0.1:{_backendPort}/health",
                 timeout,
                 cancellationToken)
             : Task.FromResult(false);
         var frontendTask = IsAlive(_frontend)
             ? CheckHttpAsync(
-                $"http://127.0.0.1:{_settings.FrontendPort}/en",
+                $"http://127.0.0.1:{_frontendPort}/en",
                 timeout,
                 cancellationToken)
             : Task.FromResult(false);
@@ -242,11 +285,13 @@ internal sealed class RuntimeController : IAsyncDisposable
             await backendTask ? ComponentState.Online : ComponentState.Offline,
             await frontendTask ? ComponentState.Online : ComponentState.Offline,
             await databaseTask ? ComponentState.Online : ComponentState.Offline,
-            _settings.ReverseSsh.Enabled ? _tunnel.State : ComponentState.Disabled,
+            _manageReverseSsh && _settings.ReverseSsh.Enabled
+                ? _tunnel.State
+                : ComponentState.Disabled,
             _settings.ReverseSsh.ActiveMapping,
             GetPid(_backend),
             GetPid(_frontend),
-            _lastError ?? _tunnel.LastError,
+            _lastError ?? (_manageReverseSsh ? _tunnel.LastError : null),
             DateTimeOffset.Now);
         SetStatus(status);
         return status;
@@ -255,8 +300,8 @@ internal sealed class RuntimeController : IAsyncDisposable
     private async Task StartCoreAsync(CancellationToken cancellationToken)
     {
         _layout.Validate();
-        EnsurePortAvailable(_settings.BackendPort, "backend");
-        EnsurePortAvailable(_settings.FrontendPort, "frontend");
+        EnsurePortAvailable(_backendPort, "backend");
+        EnsurePortAvailable(_frontendPort, "frontend");
 
         if (!await CheckTcpAsync(
                 _settings.DatabaseHost,
@@ -282,12 +327,12 @@ internal sealed class RuntimeController : IAsyncDisposable
             new Dictionary<string, string>
             {
                 ["BACKEND_HOST"] = "127.0.0.1",
-                ["BACKEND_PORT"] = _settings.BackendPort.ToString(),
+                ["BACKEND_PORT"] = _backendPort.ToString(),
             });
         await WaitForReadyAsync(
             "Backend",
             _backend,
-            $"http://127.0.0.1:{_settings.BackendPort}/health",
+            $"http://127.0.0.1:{_backendPort}/health",
             _backendOutput,
             _backendError,
             cancellationToken);
@@ -301,17 +346,20 @@ internal sealed class RuntimeController : IAsyncDisposable
             new Dictionary<string, string>
             {
                 ["HOSTNAME"] = "127.0.0.1",
-                ["PORT"] = _settings.FrontendPort.ToString(),
+                ["PORT"] = _frontendPort.ToString(),
             });
         await WaitForReadyAsync(
             "Frontend",
             _frontend,
-            $"http://127.0.0.1:{_settings.FrontendPort}/en",
+            $"http://127.0.0.1:{_frontendPort}/en",
             _frontendOutput,
             _frontendError,
             cancellationToken);
 
-        _tunnel.Start();
+        if (_manageReverseSsh && _settings.ReverseSsh.Enabled)
+        {
+            _tunnel.Start();
+        }
         _lastError = null;
         ResetHealthFailureCounters();
         await RefreshStatusAsync(cancellationToken);
@@ -459,7 +507,10 @@ internal sealed class RuntimeController : IAsyncDisposable
 
     private async Task StopCoreAsync(bool clearDesiredState)
     {
-        await _tunnel.StopAsync();
+        if (_manageReverseSsh)
+        {
+            await _tunnel.StopAsync();
+        }
         await StopProcessesOnlyAsync();
         if (clearDesiredState)
         {
@@ -521,7 +572,8 @@ internal sealed class RuntimeController : IAsyncDisposable
                     continue;
                 }
 
-                if (_settings.ReverseSsh.Enabled &&
+                if (_manageReverseSsh &&
+                    _settings.ReverseSsh.Enabled &&
                     status.ReverseSsh != ComponentState.Online)
                 {
                     // The tunnel has its own reconnect loop. This extra start
@@ -635,7 +687,9 @@ internal sealed class RuntimeController : IAsyncDisposable
             ComponentState.Starting,
             ComponentState.Starting,
             ComponentState.Starting,
-            _settings.ReverseSsh.Enabled ? ComponentState.Starting : ComponentState.Disabled,
+            _manageReverseSsh && _settings.ReverseSsh.Enabled
+                ? ComponentState.Starting
+                : ComponentState.Disabled,
             _settings.ReverseSsh.ActiveMapping,
             GetPid(_backend),
             GetPid(_frontend),

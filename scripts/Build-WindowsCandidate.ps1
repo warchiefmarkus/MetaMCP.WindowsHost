@@ -13,106 +13,44 @@ $slotPaths = @{
     B = Join-Path $root 'ReleaseB\win-x64'
 }
 
-function Get-HostProcesses {
-    @(Get-CimInstance Win32_Process | Where-Object {
-        $_.ExecutablePath -and
-        $_.ExecutablePath.StartsWith($root, [StringComparison]::OrdinalIgnoreCase) -and
-        [IO.Path]::GetFileName($_.ExecutablePath) -match '^MetaMCP(?:[.]next|[.]prev)?[.]exe$'
-    })
+function Normalize-Slot([string]$slot) {
+    $value = $slot.Trim().ToUpperInvariant()
+    if ($value -notin @('A','B')) { throw "Invalid runtime slot: $slot" }
+    return $value
 }
 
-function Get-LogicalSlot([string]$path) {
-    if ([string]::IsNullOrWhiteSpace($path)) { return $null }
-    foreach ($slot in 'A','B') {
-        if ($path.StartsWith($slotPaths[$slot], [StringComparison]::OrdinalIgnoreCase)) { return $slot }
+function Get-ActiveSlot {
+    if (Test-Path $currentPath) {
+        $state = Get-Content $currentPath -Raw | ConvertFrom-Json
+        if ($state.activeSlot -in @('A','B')) { return (Normalize-Slot ([string]$state.activeSlot)) }
     }
-    return $null
+    if (Test-Path $slotPaths.A) { return 'A' }
+    if (Test-Path $slotPaths.B) { return 'B' }
+    return 'A'
 }
 
-function Merge-JsonObject($defaults, $preserved) {
-    if ($null -eq $preserved) { return $defaults }
-    foreach ($property in $preserved.PSObject.Properties) {
-        $existing = $defaults.PSObject.Properties[$property.Name]
-        if ($existing -and $existing.Value -is [pscustomobject] -and $property.Value -is [pscustomobject]) {
-            Merge-JsonObject $existing.Value $property.Value | Out-Null
-        } elseif ($existing) {
-            $existing.Value = $property.Value
-        } else {
-            $defaults | Add-Member -NotePropertyName $property.Name -NotePropertyValue $property.Value
-        }
-    }
-    return $defaults
-}
-
-function Copy-PreservedRuntimeState([string]$sourceBase, [string]$targetBase) {
-    if ([string]::IsNullOrWhiteSpace($sourceBase) -or -not (Test-Path $sourceBase)) { return }
-    $sourceConfig = Join-Path $sourceBase 'config'
-    $targetConfig = Join-Path $targetBase 'config'
-    if (Test-Path $sourceConfig) {
-        New-Item $targetConfig -ItemType Directory -Force | Out-Null
-        Get-ChildItem $sourceConfig -Force | Where-Object Name -ne 'host.json' |
-            Copy-Item -Destination $targetConfig -Recurse -Force
-        $sourceHost = Join-Path $sourceConfig 'host.json'
-        $targetHost = Join-Path $targetConfig 'host.json'
-        if ((Test-Path $sourceHost) -and (Test-Path $targetHost)) {
-            $defaults = Get-Content $targetHost -Raw | ConvertFrom-Json
-            $preserved = Get-Content $sourceHost -Raw | ConvertFrom-Json
-            $merged = Merge-JsonObject $defaults $preserved
-            [IO.File]::WriteAllText($targetHost, ($merged | ConvertTo-Json -Depth 100), [Text.UTF8Encoding]::new($false))
-        }
-    }
-    $sourceData = Join-Path $sourceBase 'data'
-    $targetData = Join-Path $targetBase 'data'
-    if (Test-Path $sourceData) {
-        New-Item $targetData -ItemType Directory -Force | Out-Null
-        Copy-Item (Join-Path $sourceData '*') $targetData -Recurse -Force -ErrorAction SilentlyContinue
-    }
-}
-
-$running = Get-HostProcesses
-if ($running.Count -gt 1) {
-    $paths = $running | ForEach-Object { "$($_.ProcessId):$($_.ExecutablePath)" }
-    throw "More than one MetaMCP host is running under repository root: $($paths -join '; ')"
-}
-
-$activeProcess = $running | Select-Object -First 1
-$activeExe = if ($activeProcess) { $activeProcess.ExecutablePath } else { $null }
-$activeBase = if ($activeExe) { Split-Path $activeExe -Parent } else { $null }
-$activeSlot = Get-LogicalSlot $activeBase
-
-if (-not $activeSlot -and (Test-Path $currentPath)) {
-    try {
-        $current = Get-Content $currentPath -Raw | ConvertFrom-Json
-        if ($current.activeSlot -in @('A','B')) {
-            $activeSlot = [string]$current.activeSlot
-            if (-not $activeBase -and $current.activePath) { $activeBase = [string]$current.activePath }
-            if (-not $activeExe -and $current.activeExecutable) { $activeExe = [string]$current.activeExecutable }
-        }
-    } catch {
-        Write-Warning "Ignoring invalid current.json: $($_.Exception.Message)"
-    }
-}
-
-# Bootstrap without an existing A/B state intentionally lands on B.
-$targetSlot = if ($activeSlot -eq 'B') { 'A' } else { 'B' }
+$activeSlot = Get-ActiveSlot
+$activeBase = $slotPaths[$activeSlot]
+$targetSlot = if ($activeSlot -eq 'A') { 'B' } else { 'A' }
 $targetBase = $slotPaths[$targetSlot]
-$targetExe = Join-Path $targetBase 'MetaMCP.exe'
 
 $targetRunning = @(Get-CimInstance Win32_Process | Where-Object {
-    $_.ExecutablePath -and $_.ExecutablePath.StartsWith($targetBase, [StringComparison]::OrdinalIgnoreCase)
+    $_.ExecutablePath -and $_.ExecutablePath.StartsWith(
+        ([IO.Path]::GetFullPath($targetBase).TrimEnd('\') + '\'),
+        [StringComparison]::OrdinalIgnoreCase)
 })
 if ($targetRunning.Count -gt 0) {
-    throw "Refusing to overwrite active candidate slot $targetSlot. PIDs: $($targetRunning.ProcessId -join ', ')"
+    throw "Refusing to overwrite runtime slot $targetSlot while it is still running/draining. PIDs: $($targetRunning.ProcessId -join ', ')"
 }
 
-Write-Host "Active host: $(if($activeExe){$activeExe}else{'none'})"
-Write-Host "Logical active slot: $(if($activeSlot){$activeSlot}else{'none/bootstrap'})"
-Write-Host "Candidate slot: $targetSlot"
+Write-Host "Active runtime slot: $activeSlot"
+Write-Host "Candidate runtime slot: $targetSlot"
 Write-Host "Candidate output: $targetBase"
 
 $packArgs = @(
     'run', '--project', (Join-Path $root 'src\MetaMCP.Packager'), '-c', 'Release', '--',
-    '--repo', ([IO.Path]::GetFullPath($Repository)), '--target', 'win-x64', '--output', $targetBase
+    '--repo', ([IO.Path]::GetFullPath($Repository)), '--target', 'win-x64', '--output', $targetBase,
+    '--runtime-only'
 )
 if (-not $InstallDependencies) { $packArgs += '--skip-install' }
 
@@ -124,13 +62,8 @@ try {
     Pop-Location
 }
 
-Copy-PreservedRuntimeState $activeBase $targetBase
-
 foreach ($required in @(
-    $targetExe,
     (Join-Path $targetBase 'build-manifest.json'),
-    (Join-Path $targetBase 'config\host.json'),
-    (Join-Path $targetBase 'config\.env.local'),
     (Join-Path $targetBase 'runtime\node\node.exe'),
     (Join-Path $targetBase 'metamcp\backend\dist\index.js'),
     (Join-Path $targetBase 'metamcp\frontend\server.js')
@@ -140,22 +73,19 @@ foreach ($required in @(
 
 $manifest = Get-Content (Join-Path $targetBase 'build-manifest.json') -Raw | ConvertFrom-Json
 $pending = [ordered]@{
-    schemaVersion = 1
+    schemaVersion = 2
     createdAt = (Get-Date).ToString('o')
     candidateSlot = $targetSlot
     candidatePath = $targetBase
-    candidateExecutable = $targetExe
     candidateBuiltAt = $manifest.builtAt
     sourceRepository = [IO.Path]::GetFullPath($Repository)
     previousSlot = $activeSlot
     previousPath = $activeBase
-    previousExecutable = $activeExe
-    previousProcessId = if ($activeProcess) { [int]$activeProcess.ProcessId } else { $null }
 }
 $tmp = "$pendingPath.tmp"
 [IO.File]::WriteAllText($tmp, ($pending | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
 Move-Item $tmp $pendingPath -Force
 
-Write-Host "Candidate ready: $targetExe"
+Write-Host "Candidate ready: $targetSlot"
 Write-Host "Pending state: $pendingPath"
-Write-Host "NEXT: run scripts\Switch-WindowsSlot.ps1 from an external/delayed cmd process."
+Write-Host 'NEXT: scripts\Swap-WindowsRuntime.ps1'

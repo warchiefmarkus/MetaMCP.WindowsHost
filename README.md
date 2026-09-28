@@ -13,8 +13,11 @@ C:\DEV\LLM\
     ├── src\MetaMCP.Host.Linux\
     ├── src\MetaMCP.Packager\
     ├── scripts\
-    ├── ReleaseA\win-x64\
-    ├── ReleaseB\win-x64\
+    ├── MetaMCP.exe               # stable Windows bootstrapper/gateway
+    ├── config\                   # stable Windows config
+    ├── data\                     # stable Windows state
+    ├── ReleaseA\win-x64\         # runtime payload A
+    ├── ReleaseB\win-x64\         # runtime payload B
     ├── Release\                 # Linux packages only
     │   ├── linux-x64\
     │   ├── linux-x64.tar.gz
@@ -61,8 +64,9 @@ dotnet run --project .\src\MetaMCP.Packager -c Release -- `
 Фінальний layout:
 
 ```text
-ReleaseA\win-x64\   # один Windows slot
-ReleaseB\win-x64\   # другий Windows slot
+MetaMCP.exe           # stable Windows bootstrapper/gateway
+ReleaseA\win-x64\   # runtime payload A
+ReleaseB\win-x64\   # runtime payload B
 Release\
 ├── linux-x64\
 ├── linux-x64.tar.gz
@@ -80,7 +84,7 @@ Windows package містить фізичний `node_modules` без junction/s
 ```text
 Package: Select target
 Package: Windows x64
-Deploy: Windows A/B safe switch
+Deploy: Windows runtime hot-swap
 Package: Linux x64
 Package: Linux ARM64
 Package: All platforms
@@ -90,53 +94,79 @@ Build: MetaMCP.Host.Linux (Release)
 
 `Package: Select target` пропонує `win-x64`, `linux-x64`, `linux-arm64` або `all`.
 
-### Windows A/B release slots
+### Windows bootstrapper + A/B runtime slots
 
-Windows deploy використовує два стабільні слоти та один runtime state-файл:
+Windows має стабільний control/data-plane gateway у root `MetaMCP.exe`. Він не є частиною `ReleaseA/B` і не перезапускається під час звичайного runtime deploy.
 
 ```text
-ReleaseA\win-x64\
-ReleaseB\win-x64\
+MetaMCP.exe                 # стабільний tray + HTTP/MCP gateway
+config\                     # спільний host/runtime config
+data\                       # спільний runtime state
 current.json
-pending-update.json   # існує лише між build і cutover
+pending-update.json         # тільки між build і swap
+ReleaseA\win-x64\           # runtime payload A
+ReleaseB\win-x64\           # runtime payload B
 ```
 
-`current.json` є єдиним джерелом істини для активного слота. `Package: Windows x64` лише збирає **неактивний** слот через `scripts/Build-WindowsCandidate.ps1` і не перериває запущений MetaMCP. `Deploy: Windows A/B safe switch` запускає `scripts/Update-WindowsAB.ps1`: після успішної збірки він створює відокремлений `cmd.exe` з `timeout`, який уже поза поточним MetaMCP tool-call виконує `Switch-WindowsSlot.ps1`.
-
-Cutover має такий порядок:
+Публічні порти завжди належать bootstrapper-у:
 
 ```text
-active A → build B → validate → delayed cmd → stop A → start B → health OK → atomic current.json=B
-active B → build A → validate → delayed cmd → stop B → start A → health OK → atomic current.json=A
+frontend gateway  127.0.0.1:12008
+backend/MCP       127.0.0.1:12009
+
+Runtime A: frontend 12108, backend 12109
+Runtime B: frontend 12208, backend 12209
 ```
 
-Якщо candidate не проходить backend/frontend health-check, switch-скрипт завершує candidate і запускає попередній A/B slot.
+`Package: Windows x64` / `scripts\Build-WindowsCandidate.ps1` збирає лише неактивний payload slot. `Deploy: Windows runtime hot-swap` / `scripts\Update-WindowsAB.ps1` після build викликає локальний token-protected control endpoint bootstrapper-а і переключає runtime без restart `MetaMCP.exe`.
 
-Під час build у candidate переносяться runtime `config` і `data`; `host.json` merge-иться поверх нових default-полів.
+Hot-swap:
+
+```text
+A active
+→ build B
+→ start B on 12208/12209
+→ health B
+→ gateway: new sessions → B
+→ existing A mcp-session-id → A
+→ A drain (sessions=0 && in-flight=0)
+→ stop A
+→ current.json = B
+```
+
+MCP session не переноситься між process generations посеред protocol state. Gateway запам'ятовує `mcp-session-id` і тримає стару сесію на runtime, де вона була створена. Тому tool call, який ініціював swap, може коректно завершитися через старий runtime; нові sessions уже йдуть у новий slot. Якщо клієнт тримає стару session відкритою, старий slot лишається `draining` і навмисно не перезаписується наступним build.
+
+Локальне керування:
+
+```powershell
+.\scripts\Swap-WindowsRuntime.ps1 -Status
+.\scripts\Swap-WindowsRuntime.ps1
+.\scripts\Swap-WindowsRuntime.ps1 -Slot B
+```
+
+Control routes доступні тільки з loopback і вимагають `HostControlToken` із `config\host.json`:
+
+```text
+GET  /__host/runtime/status
+POST /__host/runtime/swap
+```
+
+`Install-WindowsBootstrapper.ps1` потрібен лише коли оновлюється сам bootstrapper/Host. Це окрема операція, яка замінює root `MetaMCP.exe` і тому коротко перезапускає gateway. Звичайні зміни MetaMCP backend/frontend/runtime використовують live A/B swap без restart bootstrapper-а.
 
 ## Windows host
 
-Windows host запускається тільки як portable tray application.
-
-```text
-current.json → ReleaseA\win-x64\MetaMCP.exe
-             або ReleaseB\win-x64\MetaMCP.exe
-```
+Windows host запускається тільки як portable tray/bootstrapper application. Він володіє стабільними public ports, reverse SSH tunnel routing і A/B runtime lifecycle.
 
 Tray дозволяє:
 
-- запускати, зупиняти й перезапускати runtime;
-- виконувати `Reset MCP connections`: закривати всі downstream MCP connections/process trees без зупинки backend, frontend і SSH tunnel; якщо backend не відповідає, Host пропонує повний restart runtime;
-- перемикати активний reverse SSH mapping без restart frontend/backend;
-- показувати компактне дерево `Connections: N | Sessions: M`: без проміжних `persistent/session/idle` і `Client sessions` меню; один сервер одразу містить PID, transport, короткий session ID, active request count та idle time, а кілька однакових серверів групуються як `dc [session] ×8`; client sessions без downstream connection показуються окремим leaf `Session … [no MCP]`;
-- показувати у верхньому рядку tray-меню агреговані метрики у форматі `MCP 3 | CPU 4,2% | RAM 386 MB`; `MCP` — кількість поточних `MetaMCP → MCP connections`;
-- показувати в нативному tooltip при наведенні на tray icon ті самі CPU, Working Set RAM і кількість MCP connections;
-- показувати у правому верхньому куті tray icon червоний badge з кількістю поточних `MetaMCP → MCP connections`; при `0` badge не відображається, значення понад `99` показується як `99+`;
+- запускати, зупиняти й перезапускати активний runtime;
+- виконувати `Reset MCP connections`;
+- перемикати активний reverse SSH mapping;
+- показувати sessions/connections, CPU/RAM та MCP badge;
+- показувати версію bootstrapper-а й активний runtime slot;
 - відкривати конфіг і локальний UI.
-Backend і frontend входять у Windows Job Object з `KILL_ON_JOB_CLOSE`; `Stop`, `Restart`, `Exit` і аварійне завершення Host прибирають їхні дочірні MCP process trees. STDIO transport додатково виконує `taskkill /T /F` під час штатного закриття connection.
 
-Ручне завершення всіх `node.exe` не рекомендується: разом із MCP servers воно вбиває MetaMCP backend і frontend. У такому стані tray показує `MCP: backend unavailable` або зберігає останні дані як `MCP telemetry delayed`.
-
+Backend/frontend кожного payload запускаються в Windows Job Object з `KILL_ON_JOB_CLOSE`. Під час hot-swap старий runtime не вбивається, поки gateway бачить прив'язані до нього MCP sessions або in-flight requests; після drain його process tree прибирається автоматично.
 ## Linux host
 
 Linux пакет містить self-contained .NET executable, MetaMCP frontend/backend,

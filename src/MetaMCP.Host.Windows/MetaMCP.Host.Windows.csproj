@@ -11,7 +11,10 @@
     <RootNamespace>MetaMCP.Host</RootNamespace>
     <Version>1.0.0</Version>
   </PropertyGroup>
-<ItemGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
     <Content Include="metamcp.ico" CopyToOutputDirectory="Never" />
     <EmbeddedResource Include="metamcp_32.png" LogicalName="metamcp_32.png" />
     <EmbeddedResource Include="icons\json-light.png" LogicalName="json-light.png" />

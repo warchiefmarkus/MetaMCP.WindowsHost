@@ -16,6 +16,7 @@ internal sealed class HostSettings
     public int HealthCheckIntervalSeconds { get; set; } = 10;
     public int McpMetricsRefreshSeconds { get; set; } = 5;
     public int McpTelemetryTimeoutMilliseconds { get; set; } = 5000;
+    public int RuntimeSessionIdleTimeoutSeconds { get; set; } = 1800;
     public string HostControlToken { get; set; } = string.Empty;
     public int HealthCheckTimeoutMilliseconds { get; set; } = 1500;
     public int UnhealthyChecksBeforeRestart { get; set; } = 3;
@@ -43,6 +44,7 @@ internal sealed class HostSettings
         var upgraded = UpgradeLegacyReverseSsh(json, settings.ReverseSsh) ||
             !HasRootProperty(json, nameof(McpMetricsRefreshSeconds)) ||
             !HasRootProperty(json, nameof(McpTelemetryTimeoutMilliseconds)) ||
+            !HasRootProperty(json, nameof(RuntimeSessionIdleTimeoutSeconds)) ||
             !HasRootProperty(json, nameof(HostControlToken)) ||
             string.IsNullOrWhiteSpace(settings.HostControlToken);
         settings.Normalize();
@@ -69,6 +71,10 @@ internal sealed class HostSettings
             McpTelemetryTimeoutMilliseconds,
             1000,
             30000);
+        RuntimeSessionIdleTimeoutSeconds = Math.Clamp(
+            RuntimeSessionIdleTimeoutSeconds,
+            60,
+            24 * 60 * 60);
         if (string.IsNullOrWhiteSpace(HostControlToken))
         {
             HostControlToken = Convert.ToHexString(

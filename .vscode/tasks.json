@@ -2,13 +2,13 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Run: MetaMCP.Host.Windows (active A/B slot)",
+      "label": "Run: MetaMCP Windows bootstrapper",
       "type": "shell",
-      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${workspaceFolder}\\scripts\\Run-CurrentWindowsSlot.ps1\"",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${workspaceFolder}\\scripts\\Run-WindowsBootstrapper.ps1\"",
       "group": "launch",
       "isBackground": true,
       "problemMatcher": [],
-      "detail": "Запускає active A/B slot, визначений у current.json",
+      "detail": "Запускає стабільний root MetaMCP.exe; ReleaseA/B залишаються runtime payload",
       "presentation": {
         "reveal": "silent"
       }
@@ -30,12 +30,27 @@
       "detail": "Збирає лише неактивний Windows A/B slot; live MetaMCP не перезапускається"
     },
     {
-      "label": "Deploy: Windows A/B safe switch",
+      "label": "Deploy: Windows runtime hot-swap",
       "type": "shell",
       "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${workspaceFolder}\\scripts\\Update-WindowsAB.ps1\"",
       "group": "build",
       "problemMatcher": [],
-      "detail": "Build candidate → delayed cmd cutover → health check → automatic rollback"
+      "detail": "Build inactive runtime → live gateway swap → session-aware drain старого slot без restart bootstrapper"
+    },
+    {
+      "label": "Runtime: Windows status",
+      "type": "shell",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${workspaceFolder}\\scripts\\Swap-WindowsRuntime.ps1\" -Status",
+      "problemMatcher": [],
+      "detail": "Показує stable bootstrapper, active/draining runtime slots і session counts"
+    },
+    {
+      "label": "Install/Update: Windows bootstrapper",
+      "type": "shell",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${workspaceFolder}\\scripts\\Install-WindowsBootstrapper.ps1\"",
+      "group": "build",
+      "problemMatcher": [],
+      "detail": "Оновлює сам root MetaMCP.exe; на відміну від runtime swap коротко перезапускає gateway"
     },
     {
       "label": "Package: Linux x64",

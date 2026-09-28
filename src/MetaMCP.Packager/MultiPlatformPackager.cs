@@ -100,6 +100,7 @@ internal sealed class MultiPlatformPackager
             [win],
             _options.SkipInstall,
             _options.SkipSmokeTest,
+            _options.RuntimeOnly,
             false,
             false);
     }

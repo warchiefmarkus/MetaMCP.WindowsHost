@@ -28,7 +28,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private readonly string _baseDirectory;
     private HostSettings _settings;
-    private RuntimeController? _portableRuntime;
+    private RuntimeSlotManager? _runtime;
     private readonly NotifyIcon _notifyIcon;
     private readonly Icon _applicationIcon;
     private readonly ContextMenuStrip _menu;
@@ -43,6 +43,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _stopItem;
     private readonly ToolStripMenuItem _resetMcpConnectionsItem;
     private readonly ToolStripMenuItem _resetReverseSshItem;
+    private readonly ToolStripMenuItem _versionItem;
     private readonly ToolStripMenuItem _openWebItem;
     private readonly ToolStripMenuItem _openConfigItem;
     private readonly System.Windows.Forms.Timer _timer;
@@ -76,7 +77,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _baseDirectory = (baseDirectory ?? AppContext.BaseDirectory).TrimEnd(Path.DirectorySeparatorChar);
         SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext());
         _settings = HostSettings.Load(_baseDirectory);
-        HostLog.Initialize(_baseDirectory, _settings.LoggingEnabled);
+        HostLog.Initialize(_baseDirectory, fileEnabled: true);
 
         _applicationIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath)
             ?? (Icon)SystemIcons.Application.Clone();
@@ -144,10 +145,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _menu.Items.Add(_resetMcpConnectionsItem);
         _menu.Items.Add(_resetReverseSshItem);
         _menu.Items.Add(new ToolStripSeparator());
-        _menu.Items.Add(new ToolStripMenuItem($"Version: {GetDisplayVersion()} · {GetLaunchFolderDisplayName()}")
+        _versionItem = new ToolStripMenuItem(
+            $"Version: {GetDisplayVersion()} · {GetLaunchFolderDisplayName()} · Runtime ?")
         {
             Enabled = false,
-        });
+        };
+        _menu.Items.Add(_versionItem);
         _menu.Items.Add(new ToolStripSeparator());
         _menu.Items.Add("Exit", null, async (_, _) => await ExitAsync());
 
@@ -198,10 +201,10 @@ internal sealed class TrayApplicationContext : ApplicationContext
     {
         try
         {
-            CreatePortableRuntime();
+            CreateRuntimeManager();
             if (_settings.AutoStartRuntime)
             {
-                await _portableRuntime!.StartAsync();
+                await _runtime!.StartAsync();
                 if (_settings.OpenBrowserOnPortableStart)
                 {
                     OpenFrontend();
@@ -217,10 +220,10 @@ internal sealed class TrayApplicationContext : ApplicationContext
         }
     }
 
-    private void CreatePortableRuntime()
+    private void CreateRuntimeManager()
     {
         _settings = HostSettings.Load(_baseDirectory);
-        _portableRuntime = new RuntimeController(_baseDirectory, _settings, new WindowsRuntimePlatform());
+        _runtime = new RuntimeSlotManager(_baseDirectory, _settings);
     }
 
     private void BuildMappingMenu()
@@ -248,11 +251,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
     {
         await RunBusyAsync(async () =>
         {
-            _portableRuntime ??= new RuntimeController(
-                _baseDirectory,
-                _settings,
-                new WindowsRuntimePlatform());
-            var status = await _portableRuntime.SwitchReverseSshMappingAsync(mappingId);
+            _runtime ??= new RuntimeSlotManager(_baseDirectory, _settings);
+            var status = await _runtime.SwitchReverseSshMappingAsync(mappingId);
             _settings = HostSettings.Load(_baseDirectory);
             BuildMappingMenu();
 
@@ -284,19 +284,16 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private async Task StartRuntimeCoreAsync()
     {
-        _portableRuntime ??= new RuntimeController(
-            _baseDirectory,
-            _settings,
-            new WindowsRuntimePlatform());
-        await _portableRuntime.StartAsync();
+        _runtime ??= new RuntimeSlotManager(_baseDirectory, _settings);
+        await _runtime.StartAsync();
     }
     private async Task StopRuntimeAsync()
     {
         await RunBusyAsync(async () =>
         {
-            if (_portableRuntime is not null)
+            if (_runtime is not null)
             {
-                await _portableRuntime.StopAsync();
+                await _runtime.StopAsync();
             }
 
             await RefreshAsync();
@@ -304,11 +301,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
     }
     private async Task RestartRuntimeCoreAsync()
     {
-        _portableRuntime ??= new RuntimeController(
-            _baseDirectory,
-            _settings,
-            new WindowsRuntimePlatform());
-        await _portableRuntime.RestartAsync();
+        _runtime ??= new RuntimeSlotManager(_baseDirectory, _settings);
+        await _runtime.RestartAsync();
     }
 
     private async Task ResetMcpConnectionsAsync()
@@ -415,12 +409,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
         await RunBusyAsync(async () =>
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
-            _portableRuntime ??= new RuntimeController(
-                _baseDirectory,
-                _settings,
-                new WindowsRuntimePlatform());
-            var result = await _portableRuntime.ResetReverseSshAsync(timeout.Token);
-            var status = await _portableRuntime.RefreshStatusAsync(timeout.Token);
+            _runtime ??= new RuntimeSlotManager(_baseDirectory, _settings);
+            var result = await _runtime.ResetReverseSshAsync(timeout.Token);
+            var status = await _runtime.RefreshStatusAsync(timeout.Token);
 
             UpdateStatusMenu(status);
             ShowBalloon(
@@ -441,11 +432,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
         try
         {
-            _portableRuntime ??= new RuntimeController(
-                _baseDirectory,
-                _settings,
-                new WindowsRuntimePlatform());
-            var status = await _portableRuntime.RefreshStatusAsync();
+            _runtime ??= new RuntimeSlotManager(_baseDirectory, _settings);
+            var status = await _runtime.RefreshStatusAsync();
 
             UpdateStatusMenu(status);
             if (status.Backend == ComponentState.Online &&
@@ -1127,6 +1115,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _summaryItem.Text = _lastMcpMetrics is { } metrics
             ? $"MCP {connections} | CPU {metrics.CpuPercent:0.0}% | RAM {FormatMemory(metrics.WorkingSetBytes)}"
             : $"MCP {connections} | CPU -- | RAM --";
+        _versionItem.Text =
+            $"Version: {GetDisplayVersion()} · Release{_runtime?.ActiveSlot ?? "?"}\\win-x64";
     }
 
     private async Task RunBusyAsync(Func<Task> action, string errorTitle)
@@ -1176,11 +1166,11 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _mcpMetricsTimer.Stop();
         try
         {
-            if (_portableRuntime is not null)
+            if (_runtime is not null)
             {
-                await _portableRuntime.StopAsync();
-                await _portableRuntime.DisposeAsync();
-                _portableRuntime = null;
+                await _runtime.StopAsync();
+                await _runtime.DisposeAsync();
+                _runtime = null;
             }
         }
         catch (Exception ex)

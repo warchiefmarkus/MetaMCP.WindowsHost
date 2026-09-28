@@ -56,14 +56,18 @@ internal sealed class ReleasePackager
         }
 
         ValidateInputs();
-        var preservedHostConfig = ReadOptional(
-            Path.Combine(_options.Output, "config", "host.json"));
+        var preservedHostConfig = _options.RuntimeOnly
+            ? null
+            : ReadOptional(Path.Combine(_options.Output, "config", "host.json"));
         var dataBackup = Path.Combine(_options.ProjectRoot, ".packager-data-backup");
         FileSystemUtil.DeleteDirectory(dataBackup);
-        var existingData = Path.Combine(_options.Output, "data");
-        if (Directory.Exists(existingData))
+        if (!_options.RuntimeOnly)
         {
-            FileSystemUtil.CopyDirectory(existingData, dataBackup);
+            var existingData = Path.Combine(_options.Output, "data");
+            if (Directory.Exists(existingData))
+            {
+                FileSystemUtil.CopyDirectory(existingData, dataBackup);
+            }
         }
 
         FileSystemUtil.RecreateDirectory(_options.Output);
@@ -122,19 +126,22 @@ internal sealed class ReleasePackager
             Heading("Packaging Node.js runtime");
             CopyNodeRuntime();
 
-            Heading("Publishing MetaMCP Windows host");
-            await PublishHostAsync(cancellationToken);
-
-            Heading("Writing configuration and data");
-            WriteConfiguration(preservedHostConfig);
-            FileSystemUtil.CopyFile(
-                Path.Combine(_options.ProjectRoot, "README.md"),
-                Path.Combine(_options.Output, "README.md"));
-            if (Directory.Exists(dataBackup))
+            if (!_options.RuntimeOnly)
             {
-                FileSystemUtil.CopyDirectory(dataBackup, Path.Combine(_options.Output, "data"));
+                Heading("Publishing MetaMCP Windows host");
+                await PublishHostAsync(cancellationToken);
+
+                Heading("Writing configuration and data");
+                WriteConfiguration(preservedHostConfig);
+                FileSystemUtil.CopyFile(
+                    Path.Combine(_options.ProjectRoot, "README.md"),
+                    Path.Combine(_options.Output, "README.md"));
+                if (Directory.Exists(dataBackup))
+                {
+                    FileSystemUtil.CopyDirectory(dataBackup, Path.Combine(_options.Output, "data"));
+                }
+                Directory.CreateDirectory(Path.Combine(_options.Output, "data", "mcp-runners", "default"));
             }
-            Directory.CreateDirectory(Path.Combine(_options.Output, "data", "mcp-runners", "default"));
 
             await WriteManifestAsync(cancellationToken);
 
@@ -150,8 +157,13 @@ internal sealed class ReleasePackager
 
             Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine();
-            Console.WriteLine("MetaMCP Windows release completed successfully.");
-            Console.WriteLine($"Executable: {Path.Combine(_options.Output, "MetaMCP.exe")}");
+            Console.WriteLine(_options.RuntimeOnly
+                ? "MetaMCP Windows runtime payload completed successfully."
+                : "MetaMCP Windows release completed successfully.");
+            if (!_options.RuntimeOnly)
+            {
+                Console.WriteLine($"Executable: {Path.Combine(_options.Output, "MetaMCP.exe")}");
+            }
             Console.WriteLine($"Size:       {FormatBytes(FileSystemUtil.GetDirectorySize(_options.Output))}");
             Console.ResetColor();
         }
@@ -437,9 +449,8 @@ internal sealed class ReleasePackager
 
     private void ValidateRelease()
     {
-        foreach (var file in new[]
+        var requiredFiles = new List<string>
         {
-            Path.Combine(_options.Output, "MetaMCP.exe"),
             Path.Combine(_options.Output, "runtime", "node", "node.exe"),
             Path.Combine(_options.Output, "runtime", "node", "npx.cmd"),
             Path.Combine(_options.Output, "metamcp", "backend", "dist", "index.js"),
@@ -449,9 +460,15 @@ internal sealed class ReleasePackager
             Path.Combine(_options.Output, "metamcp", "backend", "node_modules", "postgres-array", "package.json"),
             Path.Combine(_options.Output, "metamcp", "frontend", "server.js"),
             Path.Combine(_options.Output, "metamcp", "frontend", "node_modules", "react-hook-form", "package.json"),
-            Path.Combine(_options.Output, "config", ".env.local"),
-            Path.Combine(_options.Output, "config", "host.json"),
-        })
+        };
+        if (!_options.RuntimeOnly)
+        {
+            requiredFiles.Add(Path.Combine(_options.Output, "MetaMCP.exe"));
+            requiredFiles.Add(Path.Combine(_options.Output, "config", ".env.local"));
+            requiredFiles.Add(Path.Combine(_options.Output, "config", "host.json"));
+        }
+
+        foreach (var file in requiredFiles)
         {
             FileSystemUtil.RequireFile(file);
         }
@@ -492,14 +509,18 @@ internal sealed class ReleasePackager
         EnsurePortAvailable(frontendPort);
 
         var node = Path.Combine(_options.Output, "runtime", "node", "node.exe");
-        var environment = LoadEnvironment(
-            Path.Combine(_options.Output, "config", ".env.local"));
+        var environment = LoadEnvironment(_options.RuntimeOnly
+            ? Path.Combine(_options.Repository, ".env.local")
+            : Path.Combine(_options.Output, "config", ".env.local"));
         environment["NODE_ENV"] = "production";
         environment["PATH"] = Path.GetDirectoryName(node)! + Path.PathSeparator
             + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
+        var smokeData = _options.RuntimeOnly
+            ? Path.Combine(_options.ProjectRoot, ".packager-smoke-data")
+            : Path.Combine(_options.Output, "data");
+        Directory.CreateDirectory(Path.Combine(smokeData, "mcp-runners", "default"));
         environment["METAMCP_NPX_CWD"] = Path.Combine(
-            _options.Output,
-            "data",
+            smokeData,
             "mcp-runners",
             "default");
 
@@ -558,6 +579,10 @@ internal sealed class ReleasePackager
         {
             StopSmokeProcess(frontend);
             StopSmokeProcess(backend);
+            if (_options.RuntimeOnly)
+            {
+                FileSystemUtil.DeleteDirectory(smokeData);
+            }
         }
     }
 

@@ -22,6 +22,7 @@ internal sealed record CommandLineOptions(
     IReadOnlyList<TargetSpec> Targets,
     bool SkipInstall,
     bool SkipSmokeTest,
+    bool RuntimeOnly,
     bool NormalizeLinksOnly,
     bool ArchiveOnly)
 {
@@ -33,6 +34,7 @@ internal sealed record CommandLineOptions(
         var targetName = "win-x64";
         var skipInstall = false;
         var skipSmokeTest = false;
+        var runtimeOnly = false;
         var normalizeLinksOnly = false;
         var archiveOnly = false;
 
@@ -54,6 +56,9 @@ internal sealed record CommandLineOptions(
                     break;
                 case "--skip-smoke-test":
                     skipSmokeTest = true;
+                    break;
+                case "--runtime-only":
+                    runtimeOnly = true;
                     break;
                 case "--normalize-links-only":
                     normalizeLinksOnly = true;
@@ -85,6 +90,12 @@ internal sealed record CommandLineOptions(
             throw new ArgumentException(
                 "--normalize-links-only and --archive-only cannot be combined.");
         }
+        if (runtimeOnly &&
+            (targets.Count != 1 || !targets[0].IsWindows || normalizeLinksOnly || archiveOnly))
+        {
+            throw new ArgumentException(
+                "--runtime-only requires a normal single-target win-x64 package.");
+        }
 
         return new CommandLineOptions(
             projectRoot,
@@ -93,6 +104,7 @@ internal sealed record CommandLineOptions(
             targets,
             skipInstall,
             skipSmokeTest,
+            runtimeOnly,
             normalizeLinksOnly,
             archiveOnly);
     }
@@ -172,6 +184,7 @@ internal sealed record CommandLineOptions(
         Console.WriteLine("  --output PATH     Target directory or root for --target all");
         Console.WriteLine("  --skip-install    Reuse installed pnpm dependencies");
         Console.WriteLine("  --skip-smoke-test Skip executable smoke tests");
+        Console.WriteLine("  --runtime-only    Build Windows runtime payload without Host/config/data");
         Console.WriteLine("  --normalize-links-only  Normalize an existing single-target release");
         Console.WriteLine("  --archive-only    Archive an existing Linux output without rebuilding");
     }
