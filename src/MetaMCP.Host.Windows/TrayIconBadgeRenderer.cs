@@ -39,16 +39,16 @@ internal static class TrayIconBadgeRenderer
         using var badgePath = CreateRoundedRectangle(
             badgeBounds,
             Math.Min(badgeBounds.Width, badgeBounds.Height) / 2f);
-        using var badgeBrush = new SolidBrush(Color.FromArgb(255, 235, 35, 35));
-        using var outlinePen = new Pen(Color.White, 1.75f);
+        using var badgeBrush = new SolidBrush(Color.FromArgb(255, 255, 24, 24));
+        using var outlinePen = new Pen(Color.White, 2.25f);
         graphics.FillPath(badgeBrush, badgePath);
         graphics.DrawPath(outlinePen, badgePath);
 
         var fontSize = badgeText.Length switch
         {
-            1 => 17f,
-            2 => 13.5f,
-            _ => 9.5f,
+            1 => 21f,
+            2 => 16.5f,
+            _ => 11f,
         };
         var fontFamily = SystemFonts.MessageBoxFont?.FontFamily
             ?? FontFamily.GenericSansSerif;
@@ -57,17 +57,19 @@ internal static class TrayIconBadgeRenderer
             fontSize,
             FontStyle.Bold,
             GraphicsUnit.Pixel);
-        TextRenderer.DrawText(
-            graphics,
-            badgeText,
-            font,
-            Rectangle.Round(badgeBounds),
-            Color.White,
-            Color.Transparent,
-            TextFormatFlags.HorizontalCenter |
-            TextFormatFlags.VerticalCenter |
-            TextFormatFlags.SingleLine |
-            TextFormatFlags.NoPadding);
+        using var textBrush = new SolidBrush(Color.White);
+        using var textFormat = new StringFormat
+        {
+            Alignment = StringAlignment.Center,
+            LineAlignment = StringAlignment.Center,
+            FormatFlags = StringFormatFlags.NoWrap,
+        };
+        var textBounds = new RectangleF(
+            badgeBounds.X,
+            badgeBounds.Y - 0.5f,
+            badgeBounds.Width,
+            badgeBounds.Height + 0.5f);
+        graphics.DrawString(badgeText, font, textBrush, textBounds, textFormat);
 
         var handle = bitmap.GetHicon();
         if (handle == IntPtr.Zero)
@@ -97,9 +99,9 @@ internal static class TrayIconBadgeRenderer
     private static RectangleF GetBadgeBounds(string badgeText) =>
         badgeText.Length switch
         {
-            1 => new RectangleF(10f, 0f, 22f, 22f),
-            2 => new RectangleF(7f, 0f, 25f, 20f),
-            _ => new RectangleF(2f, 0f, 30f, 19f),
+            1 => new RectangleF(6f, 1f, 25f, 25f),
+            2 => new RectangleF(2f, 1f, 29f, 23f),
+            _ => new RectangleF(0f, 1f, 31f, 21f),
         };
 
     private static GraphicsPath CreateRoundedRectangle(

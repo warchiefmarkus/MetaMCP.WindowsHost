@@ -162,7 +162,7 @@ Tray дозволяє:
 - запускати, зупиняти й перезапускати активний runtime;
 - виконувати `Reset MCP connections`;
 - перемикати активний reverse SSH mapping;
-- показувати sessions/connections, CPU/RAM та MCP badge;
+- показувати MCP connections без проміжних mode-груп (`dc [session]`, `JAD-X [persistent]`, `... [idle]`) з деталями у submenu, а також client sessions, CPU/RAM та MCP badge;
 - показувати версію bootstrapper-а й активний runtime slot;
 - відкривати конфіг і локальний UI.
 

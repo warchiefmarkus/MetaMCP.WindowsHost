@@ -746,7 +746,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             "Active = sessions with in-flight MCP operations.";
         SetActivityItem(
             _sessionsItem,
-            $"Connections: {connections.Count} | Sessions: {sessions.Count} | Active: {activeSessionCount}",
+            $"MCP connections: {connections.Count} | Client sessions: {sessions.Count} | Active: {activeSessionCount}",
             sessions.Count > 0 || connections.Count > 0 ? _greenDot : _grayDot);
         _sessionsItem.DropDownItems.Clear();
 
@@ -782,18 +782,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
             var groupedConnections = serverGroup
                 .OrderBy(connection => connection.ProcessId ?? int.MaxValue)
                 .ToArray();
-            if (groupedConnections.Length == 1)
-            {
-                var connection = groupedConnections[0];
-                var linkedSessions = connection.SessionIds
-                    .Where(sessionById.ContainsKey)
-                    .Select(sessionId => sessionById[sessionId])
-                    .ToArray();
-                parent.DropDownItems.Add(CreateDisabledMenuItem(
-                    BuildConnectionLabel(connection, linkedSessions)));
-                continue;
-            }
-
             var countSuffix = groupedConnections.Length > 1
                 ? $" ×{groupedConnections.Length}"
                 : string.Empty;
@@ -816,15 +804,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
             parent.DropDownItems.Add(serverItem);
         }
-    }
-
-    private static string BuildConnectionLabel(
-        McpConnectionInfo connection,
-        IReadOnlyList<McpSessionInfo> sessions)
-    {
-        var details = BuildConnectionEntryText(connection, sessions);
-        return $"{connection.ServerName} " +
-            $"[{FormatConnectionKind(connection.Kind)}] · {details}";
     }
 
     private static string BuildConnectionEntryText(
