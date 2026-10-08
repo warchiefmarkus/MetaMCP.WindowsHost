@@ -80,7 +80,7 @@ internal sealed class ReleasePackager
             {
                 Heading("Installing workspace dependencies");
                 await RunPnpmAsync(
-                    ["install", "--no-frozen-lockfile"],
+                    ["install", "--no-frozen-lockfile", "--prod=false"],
                     buildEnvironment,
                     cancellationToken);
             }
