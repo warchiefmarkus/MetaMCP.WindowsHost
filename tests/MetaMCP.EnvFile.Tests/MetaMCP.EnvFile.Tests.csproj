@@ -4,11 +4,8 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AssemblyName>MetaMCP.Packager</AssemblyName>
-    <RootNamespace>MetaMCP.Packager</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="..\MetaMCP.Host.Core\EnvFile.cs" Link="EnvFile.cs" />
-    <None Include="assets\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <Compile Include="..\..\src\MetaMCP.Host.Core\EnvFile.cs" Link="EnvFile.cs" />
   </ItemGroup>
 </Project>

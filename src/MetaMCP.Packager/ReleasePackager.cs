@@ -732,27 +732,8 @@ internal sealed class ReleasePackager
         }
     }
 
-    private static Dictionary<string, string> LoadEnvironment(string path)
-    {
-        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var rawLine in File.ReadLines(path))
-        {
-            var line = rawLine.Trim();
-            if (line.Length == 0 || line.StartsWith('#')) continue;
-            var separator = line.IndexOf('=');
-            if (separator <= 0) continue;
-            var key = line[..separator].Trim();
-            var value = line[(separator + 1)..].Trim();
-            if (value.Length >= 2 &&
-                ((value[0] == '"' && value[^1] == '"') ||
-                 (value[0] == '\'' && value[^1] == '\'')))
-            {
-                value = value[1..^1];
-            }
-            values[key] = value;
-        }
-        return values;
-    }
+    private static Dictionary<string, string> LoadEnvironment(string path) =>
+        MetaMCP.Host.EnvFile.Load(path);
 
     private static void EnsurePortAvailable(int port)
     {

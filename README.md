@@ -224,6 +224,27 @@ Systemd використовує `KillMode=control-group`, тому при зу�
 прибираються host, frontend, backend і дочірні MCP-процеси.
 ## Конфігурація
 
+Host і production packager використовують один парсер `.env.local`. Він підтримує
+посилання виду `${VAR}` на значення з цього файлу (зокрема визначені нижче рядком),
+а також на змінні середовища процесу. Приклад для нативного PostgreSQL:
+
+```dotenv
+POSTGRES_HOST=127.0.0.1
+POSTGRES_PORT=5432
+POSTGRES_USER=metamcp_user
+POSTGRES_PASSWORD=replace-with-private-password
+POSTGRES_DB=metamcp_db
+DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+```
+
+Парсер прибирає кінцеві коментарі після пробілу (`FLAG=true # comment`),
+але зберігає `#` усередині значень. Для невизначених і циклічних
+`${VAR}` виводиться явна помилка. Реальні паролі зберігай лише у локальному
+`.env.local` (він ігнорується Git), а не в репозиторії.
+
+Регресійні перевірки: `dotnet run --project .\\tests\\MetaMCP.EnvFile.Tests -c Release`.
+
+
 Основні файли пакета:
 
 ```text
