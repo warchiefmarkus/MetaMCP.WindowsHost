@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [int]$DelaySeconds = 8
 )
@@ -47,11 +47,12 @@ $err = Join-Path $work "install-bootstrapper-$stamp.err.log"
 $delay = [Math]::Max(3, $DelaySeconds)
 $body = @"
 @echo off
+setlocal EnableDelayedExpansion
 timeout /t $delay /nobreak >nul
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$complete" -StagedExe "$stagedExe" 1>>"$out" 2>>"$err"
-set RC=%ERRORLEVEL%
-echo %DATE% %TIME% exit=%RC%>>"$out"
-exit /b %RC%
+set "RC=!ERRORLEVEL!"
+echo %DATE% %TIME% exit=!RC!>>"$out"
+exit /b !RC!
 "@
 [IO.File]::WriteAllText($cmd, $body, [Text.ASCIIEncoding]::new())
 Start-Process -FilePath $cmd -WindowStyle Hidden
