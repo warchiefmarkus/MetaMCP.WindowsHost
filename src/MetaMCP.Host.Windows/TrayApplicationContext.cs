@@ -134,16 +134,19 @@ internal sealed class TrayApplicationContext : ApplicationContext
             ToolTipText = "Close all downstream MCP servers without stopping MetaMCP.",
         };
         _resetReverseSshItem = new ToolStripMenuItem(
-            "Technical SSH reset",
+            "Reconnect Reverse SSH",
             null,
             async (_, _) => await ResetReverseSshAsync())
         {
             ToolTipText =
-                "Restart the tunnel and clear stale remote sshd listeners on the active VPS port.",
+                "Reconnect only the SSH tunnel; keep backend and frontend running.",
         };
         _menu.Items.AddRange([_startRestartItem, _stopItem]);
         _menu.Items.Add(_resetMcpConnectionsItem);
         _menu.Items.Add(_resetReverseSshItem);
+        _menu.Items.Add(new ToolStripMenuItem(
+            "Connection diagnostics...", null,
+            async (_, _) => await ShowConnectionDiagnosticsAsync()));
         _menu.Items.Add(new ToolStripSeparator());
         _versionItem = new ToolStripMenuItem(
             $"Version: {GetDisplayVersion()} · {GetLaunchFolderDisplayName()} · Runtime ?")
@@ -386,43 +389,40 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private async Task ResetReverseSshAsync()
     {
-        var mapping = ResolveMapping(_settings.ReverseSsh.ActiveMapping);
-        if (mapping is null)
-        {
-            throw new InvalidOperationException(
-                "The active Reverse SSH mapping is missing from host.json.");
-        }
-
-        var confirmation = MessageBox.Show(
-            $"Restart Reverse SSH [{mapping.DisplayName}] and clear stale remote SSH listeners?\n\n" +
-            $"Only sshd sessions listening on VPS port {mapping.RemotePort} will be terminated.\n" +
-            "SSH port 22, other mapping ports and VPS services will not be changed.",
-            "Technical SSH reset",
-            MessageBoxButtons.YesNo,
-            MessageBoxIcon.Warning,
-            MessageBoxDefaultButton.Button2);
-        if (confirmation != DialogResult.Yes)
-        {
-            return;
-        }
-
         await RunBusyAsync(async () =>
         {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
             _runtime ??= new RuntimeSlotManager(_baseDirectory, _settings);
-            var result = await _runtime.ResetReverseSshAsync(timeout.Token);
+            await _runtime.ResetReverseSshAsync(timeout.Token);
             var status = await _runtime.RefreshStatusAsync(timeout.Token);
-
             UpdateStatusMenu(status);
             ShowBalloon(
-                "Reverse SSH technical reset",
-                result.Summary + " Tunnel is online.",
+                "Reverse SSH reconnected",
+                $"SSH tunnel for {_settings.ReverseSsh.ActiveMapping}: {status.ReverseSsh}.",
                 status.ReverseSsh == ComponentState.Online
-                    ? ToolTipIcon.Info
-                    : ToolTipIcon.Warning);
-            await RefreshAsync();
-        }, "Reverse SSH technical reset failed");
+                    ? ToolTipIcon.Info : ToolTipIcon.Warning);
+        }, "Reverse SSH reconnect failed");
     }
+
+    private async Task ShowConnectionDiagnosticsAsync()
+    {
+        try
+        {
+            _runtime ??= new RuntimeSlotManager(_baseDirectory, _settings);
+            var report = await _runtime.GetConnectionDiagnosticsAsync();
+            HostLog.Info("Connection diagnostics:\n" + report);
+            MessageBox.Show(report,
+                "MetaMCP connection diagnostics",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            HostLog.Error("Connection diagnostics failed.", ex);
+            ShowError("Connection diagnostics failed", ex.Message);
+        }
+    }
+
     private async Task RefreshAsync()
     {
         if (_exiting)

@@ -155,6 +155,10 @@ POST /__host/runtime/swap
 
 ## Windows host
 
+Windows Reverse SSH використовує окремий системний `ssh.exe` (Windows OpenSSH Client) замість in-process SSH.NET forwarding. Це ізолює фатальні винятки SSH-потоків від `MetaMCP.exe`. Процес прив'язаний до Windows Job Object (`KILL_ON_JOB_CLOSE`), має `ExitOnForwardFailure`, `ServerAliveInterval`, пробу HTTP через VPS і перепідключення за `ReverseSsh.ReconnectDelaySeconds`. Windows OpenSSH вимагає налаштовану SSH key authentication та перевірений host key у `known_hosts` (не вимикайте `StrictHostKeyChecking`).
+
+Tray menu `Reconnect Reverse SSH` перезапускає **лише SSH-тунель** без примусового видалення віддалених `sshd`; `Connection diagnostics...` порівнює direct/backend gateway/frontend HTTP health та виводить причину SSH-збою, час останнього з'єднання і stderr. Діагностика доступна навіть коли backend недоступний.
+
 Windows host запускається тільки як portable tray/bootstrapper application. Він володіє стабільними public ports, reverse SSH tunnel routing і A/B runtime lifecycle.
 
 Tray дозволяє:

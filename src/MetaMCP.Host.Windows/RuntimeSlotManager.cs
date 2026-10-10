@@ -19,7 +19,7 @@ internal sealed class RuntimeSlotManager : IAsyncDisposable
         new(StringComparer.OrdinalIgnoreCase);
     private readonly CancellationTokenSource _lifetime = new();
     private readonly RuntimeGateway _gateway;
-    private readonly ReverseSshTunnel _tunnel;
+    private readonly WindowsOpenSshTunnel _tunnel;
     private SlotInstance _active;
     private bool _gatewayStarted;
     private bool _disposed;
@@ -33,7 +33,7 @@ internal sealed class RuntimeSlotManager : IAsyncDisposable
 
         var activeSlot = ReadActiveSlot();
         _active = CreateSlot(activeSlot);
-        _tunnel = new ReverseSshTunnel(settings.ReverseSsh);
+        _tunnel = new WindowsOpenSshTunnel(settings.ReverseSsh);
         _gateway = new RuntimeGateway(
             settings.BackendPort,
             settings.FrontendPort,
@@ -133,6 +133,56 @@ internal sealed class RuntimeSlotManager : IAsyncDisposable
             LastError = status.LastError ?? _tunnel.LastError,
             UpdatedAt = DateTimeOffset.Now,
         };
+
+    public async Task<string> GetConnectionDiagnosticsAsync(CancellationToken cancellationToken = default)
+    {
+        var status = await RefreshStatusAsync(cancellationToken);
+        var checks = await Task.WhenAll(
+            ProbeHttpAsync($"http://127.0.0.1:{_settings.BackendPort}/metamcp/health/sessions", "Backend via gateway", cancellationToken),
+            ProbeHttpAsync($"http://127.0.0.1:{_active.Controller.BackendPort}/health", "Backend direct", cancellationToken),
+            ProbeHttpAsync($"http://127.0.0.1:{_settings.FrontendPort}/en", "Frontend via gateway", cancellationToken),
+            ProbeHttpAsync($"http://127.0.0.1:{_active.Controller.FrontendPort}/en", "Frontend direct", cancellationToken));
+
+        var backendDirectOk = checks[1].Contains("HTTP 200", StringComparison.Ordinal);
+        var backendGatewayOk = checks[0].Contains("HTTP 200", StringComparison.Ordinal);
+        var reason = !backendDirectOk
+            ? "Backend does not respond directly: investigate Node.js CPU, logs, crashes or /health."
+            : !backendGatewayOk
+                ? "Backend is healthy directly, but gateway/session path is failing: investigate proxy and sessions."
+                : status.ReverseSsh != ComponentState.Online
+                    ? "Backend is healthy locally; investigate OpenSSH transport, VPS forwarded port and SSH stderr."
+                    : "Local backend and SSH are healthy now; previous errors may be transient.";
+
+        return string.Join(Environment.NewLine,
+            "MetaMCP connection diagnostics — " + DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz"),
+            "Active: Release" + _active.Slot + " | Host PID " + Environment.ProcessId,
+            "Backend: " + status.Backend + " | Frontend: " + status.Frontend +
+                " | PostgreSQL: " + status.Database + " | Reverse SSH: " + status.ReverseSsh,
+            "",
+            string.Join(Environment.NewLine, checks),
+            "",
+            _tunnel.DiagnosticSummary,
+            "",
+            "Runtime error: " + (status.LastError ?? "none"),
+            "Assessment: " + reason);
+    }
+
+    private static async Task<string> ProbeHttpAsync(
+        string url, string caption, CancellationToken cancellationToken)
+    {
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(4) };
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            using var response = await http.GetAsync(
+                url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            return $"{caption}: HTTP {(int)response.StatusCode} ({sw.ElapsedMilliseconds} ms)";
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            return $"{caption}: FAILED ({sw.ElapsedMilliseconds} ms) {ex.GetType().Name}: {ex.Message}";
+        }
+    }
 
     public async Task<RuntimeStatus> SwitchReverseSshMappingAsync(
         string mappingId,

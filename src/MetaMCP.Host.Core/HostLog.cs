@@ -1,4 +1,4 @@
-﻿namespace MetaMCP.Host;
+namespace MetaMCP.Host;
 
 internal static class HostLog
 {
@@ -54,7 +54,18 @@ internal static class HostLog
 
             if (_fileEnabled && _path is not null)
             {
-                File.AppendAllText(_path, line + Environment.NewLine);
+                try
+                {
+                    File.AppendAllText(_path, line + Environment.NewLine);
+                }
+                catch (IOException ioError)
+                {
+                    System.Diagnostics.Debug.WriteLine($"MetaMCP logging I/O failed: {ioError.Message}");
+                }
+                catch (UnauthorizedAccessException accessError)
+                {
+                    System.Diagnostics.Debug.WriteLine($"MetaMCP logging denied: {accessError.Message}");
+                }
             }
         }
     }
