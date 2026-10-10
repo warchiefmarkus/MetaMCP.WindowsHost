@@ -79,9 +79,17 @@ internal sealed class ReleasePackager
             if (!_options.SkipInstall)
             {
                 Heading("Installing workspace dependencies");
+                // pnpm may prompt before replacing existing node_modules, but the
+                // packager runs it with redirected output and no interactive input.
+                // Keep CI scoped to installation so builds retain their normal behavior.
+                var installEnvironment = new Dictionary<string, string>(
+                    buildEnvironment, StringComparer.OrdinalIgnoreCase)
+                {
+                    ["CI"] = "true",
+                };
                 await RunPnpmAsync(
                     ["install", "--no-frozen-lockfile", "--prod=false"],
-                    buildEnvironment,
+                    installEnvironment,
                     cancellationToken);
             }
 
