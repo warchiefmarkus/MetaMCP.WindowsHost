@@ -32,16 +32,14 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly NotifyIcon _notifyIcon;
     private readonly Icon _applicationIcon;
     private readonly ContextMenuStrip _menu;
-    private readonly ToolStripMenuItem _summaryItem;
-    private readonly ToolStripControlHost _statusTableHost;
-    private readonly StatusTableControl _statusTable;
+    private readonly ToolStripControlHost _metricsHost;
+    private readonly MetricsTableControl _metricsTable;
+    private readonly ToolStripMenuItem[] _statusItems = new ToolStripMenuItem[5];
     private readonly ToolStripMenuItem _sessionsItem;
     private readonly ToolStripMenuItem _mappingItem;
     private readonly Dictionary<string, ToolStripMenuItem> _mappingItems =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ToolStripMenuItem _startRestartItem;
-    private readonly ToolStripMenuItem _stopItem;
-    private readonly ToolStripMenuItem _resetMcpConnectionsItem;
     private readonly ToolStripMenuItem _resetReverseSshItem;
     private readonly ToolStripMenuItem _versionItem;
     private readonly ToolStripMenuItem _openWebItem;
@@ -89,29 +87,31 @@ internal sealed class TrayApplicationContext : ApplicationContext
             MinimumSize = new Size(TrayMenuWidth, 0),
             MaximumSize = new Size(TrayMenuWidth, 0),
         };
-        _summaryItem = CreateInformationItem(string.Empty);
-        _statusTable = new StatusTableControl();
-        _statusTableHost = new ToolStripControlHost(_statusTable)
+        _metricsTable = new MetricsTableControl();
+        _metricsHost = new ToolStripControlHost(_metricsTable)
         {
-            AutoSize = true,
+            AutoSize = false,
+            Size = new Size(TrayMenuWidth - 35, 24),
             Margin = Padding.Empty,
             Padding = Padding.Empty,
         };
-        _sessionsItem = CreateStatusItem("Sessions: checking...");
+        for (var row = 0; row < _statusItems.Length; row++)
+        {
+            _statusItems[row] = CreateStatusItem(string.Empty);
+        }
+        _sessionsItem = CreateStatusItem("MCP: --    Sessions: --    Active: --");
         _mappingItem = new ToolStripMenuItem("Reverse SSH mapping");
         BuildMappingMenu();
-        _menu.Items.AddRange([
-            _summaryItem,
-            _sessionsItem,
-            new ToolStripSeparator(),
-            _statusTableHost,
-            new ToolStripSeparator(),
-            _mappingItem,
-            new ToolStripSeparator(),
-        ]);
+        _menu.Items.Add(_metricsHost);
+        _menu.Items.Add(_sessionsItem);
+        _menu.Items.Add(new ToolStripSeparator());
+        _menu.Items.AddRange(_statusItems);
+        _menu.Items.Add(new ToolStripSeparator());
+        _menu.Items.Add(_mappingItem);
+        _menu.Items.Add(new ToolStripSeparator());
 
         _openWebItem = new ToolStripMenuItem(
-            "MetaMCP Webs",
+            "MetaMCP",
             _appMenuIcon,
             (_, _) => OpenFrontend())
         {
@@ -125,14 +125,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
             "Start",
             null,
             async (_, _) => await StartOrRestartRuntimeAsync());
-        _stopItem = new ToolStripMenuItem("Stop", null, async (_, _) => await StopRuntimeAsync());
-        _resetMcpConnectionsItem = new ToolStripMenuItem(
-            "Reset MCP connections",
-            null,
-            async (_, _) => await ResetMcpConnectionsAsync())
-        {
-            ToolTipText = "Close all downstream MCP servers without stopping MetaMCP.",
-        };
         _resetReverseSshItem = new ToolStripMenuItem(
             "Reconnect Reverse SSH",
             null,
@@ -141,8 +133,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             ToolTipText =
                 "Reconnect only the SSH tunnel; keep backend and frontend running.",
         };
-        _menu.Items.AddRange([_startRestartItem, _stopItem]);
-        _menu.Items.Add(_resetMcpConnectionsItem);
+        _menu.Items.Add(_startRestartItem);
         _menu.Items.Add(_resetReverseSshItem);
         _menu.Items.Add(new ToolStripMenuItem(
             "Connection diagnostics...", null,
@@ -290,101 +281,11 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _runtime ??= new RuntimeSlotManager(_baseDirectory, _settings);
         await _runtime.StartAsync();
     }
-    private async Task StopRuntimeAsync()
-    {
-        await RunBusyAsync(async () =>
-        {
-            if (_runtime is not null)
-            {
-                await _runtime.StopAsync();
-            }
 
-            await RefreshAsync();
-        }, "Stop failed");
-    }
     private async Task RestartRuntimeCoreAsync()
     {
         _runtime ??= new RuntimeSlotManager(_baseDirectory, _settings);
         await _runtime.RestartAsync();
-    }
-
-    private async Task ResetMcpConnectionsAsync()
-    {
-        var confirmation = MessageBox.Show(
-            "Close all downstream MCP connections and local MCP processes?\n\n" +
-            "Active tool calls will fail. The next tool call will create a fresh connection.",
-            "Reset MCP connections",
-            MessageBoxButtons.YesNo,
-            MessageBoxIcon.Warning,
-            MessageBoxDefaultButton.Button2);
-        if (confirmation != DialogResult.Yes)
-        {
-            return;
-        }
-
-        await RunBusyAsync(async () =>
-        {
-            try
-            {
-                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-                using var request = new HttpRequestMessage(
-                    HttpMethod.Post,
-                    $"http://127.0.0.1:{_settings.BackendPort}/host-control/mcp-connections/reset");
-                request.Headers.Add(
-                    "X-MetaMCP-Host-Control-Token",
-                    _settings.HostControlToken);
-                using var response = await _metricsHttp.SendAsync(request, timeout.Token);
-                response.EnsureSuccessStatusCode();
-                await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token);
-                using var document = await System.Text.Json.JsonDocument.ParseAsync(
-                    stream,
-                    cancellationToken: timeout.Token);
-                var root = document.RootElement;
-                var requested = ReadInt(root, "requestedConnections");
-                var closed = ReadInt(root, "closedConnections");
-                var failed = ReadInt(root, "failedConnections");
-                var timedOut = ReadInt(root, "timedOutConnections");
-                ShowBalloon(
-                    "MCP connections reset",
-                    $"Closed {closed}/{requested}. Failed: {failed}. Timed out: {timedOut}.",
-                    failed == 0 && timedOut == 0 ? ToolTipIcon.Info : ToolTipIcon.Warning);
-                if (failed > 0 || timedOut > 0)
-                {
-                    var restart = MessageBox.Show(
-                        "Some MCP connections did not close cleanly. Restart the complete runtime to force process-tree cleanup?",
-                        "Incomplete MCP reset",
-                        MessageBoxButtons.YesNo,
-                        MessageBoxIcon.Question,
-                        MessageBoxDefaultButton.Button1);
-                    if (restart == DialogResult.Yes)
-                    {
-                        await RestartRuntimeCoreAsync();
-                    }
-                }
-            }
-            catch (Exception resetError)
-            {
-                HostLog.Error("MCP connection reset endpoint failed.", resetError);
-                var restart = MessageBox.Show(
-                    "The backend did not complete the MCP reset. Restart the complete MetaMCP runtime instead?",
-                    "MCP reset failed",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Question,
-                    MessageBoxDefaultButton.Button1);
-                if (restart != DialogResult.Yes)
-                {
-                    throw;
-                }
-
-                await RestartRuntimeCoreAsync();
-                ShowBalloon(
-                    "MetaMCP restarted",
-                    "The backend was unavailable, so the complete runtime was restarted.",
-                    ToolTipIcon.Warning);
-            }
-
-            await RefreshAsync();
-        }, "Reset MCP connections failed");
     }
 
     private async Task ResetReverseSshAsync()
@@ -746,7 +647,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             "Active = sessions with in-flight MCP operations.";
         SetActivityItem(
             _sessionsItem,
-            $"MCP connections: {connections.Count} | Client sessions: {sessions.Count} | Active: {activeSessionCount}",
+            $"MCP: {connections.Count}    Sessions: {sessions.Count}    Active: {activeSessionCount}",
             sessions.Count > 0 || connections.Count > 0 ? _greenDot : _grayDot);
         _sessionsItem.DropDownItems.Clear();
 
@@ -840,7 +741,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             parts.Add($"Idle {FormatIdleDuration(sessions[0].IdleMilliseconds)}");
         }
 
-        return string.Join(" | ", parts);
+        return string.Join("  ·  ", parts);
     }
 
     private static void AddOrphanSessions(
@@ -920,7 +821,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 : "unknown";
             SetActivityItem(
                 _sessionsItem,
-                $"MCP delayed · last {sessions} sessions / {connections} connections",
+                $"MCP: {connections}    Sessions: {sessions}    Active: --",
                 _yellowDot);
             _sessionsItem.ToolTipText =
                 $"Last successful telemetry: {age} ago. {reason}".Trim();
@@ -953,9 +854,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
             ? "Restart MetaMCP runtime."
             : "Start MetaMCP runtime.";
         _startRestartItem.Enabled = !_busy;
-        _stopItem.Enabled = !_busy && status.DesiredRunning;
-        _resetMcpConnectionsItem.Enabled = !_busy &&
-            status.Backend == ComponentState.Online;
         _resetReverseSshItem.Enabled = !_busy &&
             status.DesiredRunning &&
             _settings.ReverseSsh.Enabled;
@@ -1058,9 +956,16 @@ internal sealed class TrayApplicationContext : ApplicationContext
             : $"Tunnel: {mapping.DisplayName} ({mapping.PublicPath})";
     }
 
+    private void SetStatusRow(int row, string text, Image image)
+    {
+        var item = _statusItems[row];
+        item.Text = text;
+        item.Image = image;
+    }
+
     private void SetOverallStatus(OverallState state)
     {
-        _statusTable.SetRow(
+        SetStatusRow(
             0,
             $"Status: {GetOverallText(state)}",
             state switch
@@ -1076,7 +981,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         string name,
         ComponentState state)
     {
-        _statusTable.SetRow(
+        SetStatusRow(
             row,
             $"{name}: {GetComponentText(state)}",
             state switch
@@ -1091,9 +996,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private void UpdateSummaryMenu()
     {
         var connections = _lastConnectionCount ?? 0;
-        _summaryItem.Text = _lastMcpMetrics is { } metrics
-            ? $"MCP {connections} | CPU {metrics.CpuPercent:0.0}% | RAM {FormatMemory(metrics.WorkingSetBytes)}"
-            : $"MCP {connections} | CPU -- | RAM --";
+        _metricsTable.SetValues(connections, _lastMcpMetrics);
         _versionItem.Text =
             $"Version: {GetDisplayVersion()} · Release{_runtime?.ActiveSlot ?? "?"}\\win-x64";
     }
@@ -1125,8 +1028,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
     {
         _busy = busy;
         _startRestartItem.Enabled = !busy;
-        _stopItem.Enabled = !busy;
-        _resetMcpConnectionsItem.Enabled = !busy && _backendOnline;
         _resetReverseSshItem.Enabled = !busy &&
             _runtimeDesiredRunning &&
             _settings.ReverseSsh.Enabled;
@@ -1248,12 +1149,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
             AutoToolTip = false,
         };
 
-    private static ToolStripMenuItem CreateInformationItem(string text) =>
-        new(text)
-        {
-            Enabled = true,
-            AutoToolTip = false,
-        };
 
     private static Image CreateDot(Color color)
     {
@@ -1356,7 +1251,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             var newIcon = CreateJsonForCurrentTheme();
             var old = Interlocked.Exchange(ref _jsonIcon, newIcon);
             _openConfigItem.Image = newIcon;
-            _statusTable.ApplySystemColors();
+            _metricsTable.ApplySystemColors();
             old?.Dispose();
         }
         catch { }

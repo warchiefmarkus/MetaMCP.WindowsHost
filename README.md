@@ -163,10 +163,12 @@ Windows host запускається тільки як portable tray/bootstrapp
 
 Tray дозволяє:
 
-- запускати, зупиняти й перезапускати активний runtime;
-- виконувати `Reset MCP connections`;
+- запускати й перезапускати активний runtime (`Start`/`Restart`);
 - перемикати активний reverse SSH mapping;
 - показувати MCP connections без проміжних mode-груп (`dc [session]`, `JAD-X [persistent]`, `... [idle]`) з деталями у submenu, а також client sessions, CPU/RAM та MCP badge;
+- відображати MCP/CPU/RAM у трьох колонках (`TableLayoutPanel`) без `|`; наступний рядок `MCP: N    Sessions: N    Active: N` зберігає інтерактивне submenu;
+- малювати індикатори Status/Backend/Frontend/PostgreSQL/Reverse SSH штатними елементами меню, на одній горизонтальній позиції з індикатором MCP; не показувати `Stop` і `Reset MCP connections` у tray;
+- показувати посилання на вебінтерфейс як `MetaMCP` (без суфікса `Webs`);
 - показувати версію bootstrapper-а й активний runtime slot;
 - відкривати конфіг і локальний UI.
 
