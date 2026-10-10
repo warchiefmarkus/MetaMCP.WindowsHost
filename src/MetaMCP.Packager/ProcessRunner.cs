@@ -114,10 +114,11 @@ internal static class ProcessRunner
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
             };
-            shell.ArgumentList.Add("/d");
-            shell.ArgumentList.Add("/s");
-            shell.ArgumentList.Add("/c");
-            shell.ArgumentList.Add(command);
+            // cmd.exe /s /c must receive one quoted command string. Passing
+            // the complete command through ArgumentList adds another layer of
+            // quoting, which breaks batch paths such as C:\Program Files\nodejs\npm.cmd.
+            // /s removes only the outer pair, leaving the executable/arg quotes intact.
+            shell.Arguments = $"/d /s /c \"{command}\"";
             return shell;
         }
 
