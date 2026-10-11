@@ -7,7 +7,7 @@ namespace MetaMCP.Host;
 internal sealed class MetricsTableControl : UserControl
 {
     private readonly TableLayoutPanel _table;
-    private readonly Label _mcp = CreateCell();
+    private readonly Label _proc = CreateCell();
     private readonly Label _cpu = CreateCell();
     private readonly Label _ram = CreateCell();
 
@@ -33,11 +33,11 @@ internal sealed class MetricsTableControl : UserControl
         _table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 37));
         _table.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-        _table.Controls.Add(_mcp, 0, 0);
+        _table.Controls.Add(_proc, 0, 0);
         _table.Controls.Add(_cpu, 1, 0);
         _table.Controls.Add(_ram, 2, 0);
         Controls.Add(_table);
-        SetValues(0, null);
+        SetValues(null);
         ApplySystemColors();
     }
 
@@ -51,9 +51,9 @@ internal sealed class MetricsTableControl : UserControl
         AutoEllipsis = true,
     };
 
-    public void SetValues(int connections, McpProcessMetrics? metrics)
+    public void SetValues(McpProcessMetrics? metrics)
     {
-        _mcp.Text = $"MCP: {connections}";
+        _proc.Text = metrics is null ? "Proc: --" : $"Proc: {metrics.ProcessCount}";
         _cpu.Text = metrics is null ? "CPU: --" : $"CPU: {metrics.CpuPercent:0.0}%";
         _ram.Text = metrics is null ? "RAM: --" : $"RAM: {FormatMemory(metrics.WorkingSetBytes)}";
     }
@@ -70,7 +70,7 @@ internal sealed class MetricsTableControl : UserControl
         BackColor = SystemColors.Menu;
         ForeColor = SystemColors.MenuText;
         _table.BackColor = BackColor;
-        foreach (var label in new[] { _mcp, _cpu, _ram })
+        foreach (var label in new[] { _proc, _cpu, _ram })
         {
             label.BackColor = BackColor;
             label.ForeColor = ForeColor;

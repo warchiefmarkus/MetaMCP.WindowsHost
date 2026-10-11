@@ -99,7 +99,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         {
             _statusItems[row] = CreateStatusItem(string.Empty);
         }
-        _sessionsItem = CreateStatusItem("MCP: --    Sessions: --    Active: --");
+        _sessionsItem = CreateStatusItem("Conn: --    Sessions: --    Active: --");
         _mappingItem = new ToolStripMenuItem("Reverse SSH mapping");
         BuildMappingMenu();
         _menu.Items.Add(_metricsHost);
@@ -647,7 +647,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             "Active = sessions with in-flight MCP operations.";
         SetActivityItem(
             _sessionsItem,
-            $"MCP: {connections.Count}    Sessions: {sessions.Count}    Active: {activeSessionCount}",
+            $"Conn: {connections.Count}    Sessions: {sessions.Count}    Active: {activeSessionCount}",
             sessions.Count > 0 || connections.Count > 0 ? _greenDot : _grayDot);
         _sessionsItem.DropDownItems.Clear();
 
@@ -995,8 +995,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private void UpdateSummaryMenu()
     {
-        var connections = _lastConnectionCount ?? 0;
-        _metricsTable.SetValues(connections, _lastMcpMetrics);
+        _metricsTable.SetValues(_lastMcpMetrics);
         _versionItem.Text =
             $"Version: {GetDisplayVersion()} · Release{_runtime?.ActiveSlot ?? "?"}\\win-x64";
     }
