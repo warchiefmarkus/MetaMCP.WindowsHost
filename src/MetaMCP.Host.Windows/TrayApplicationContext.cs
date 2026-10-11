@@ -5,7 +5,7 @@ namespace MetaMCP.Host;
 
 internal sealed class TrayApplicationContext : ApplicationContext
 {
-    private const int TrayMenuWidth = 300;
+    private const int TrayMenuWidth = 440;
     private const int McpTelemetryRetryCount = 2;
 
     private sealed record McpConnectionInfo(

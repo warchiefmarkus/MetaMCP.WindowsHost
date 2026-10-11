@@ -678,6 +678,9 @@ internal sealed class RuntimeController : IAsyncDisposable
         _environment["BACKEND_HOST"] = "127.0.0.1";
         _environment["METAMCP_NPX_CWD"] = _layout.RunnerDirectory;
         _environment["METAMCP_HOST_CONTROL_TOKEN"] = _settings.HostControlToken;
+        // A public route is specific to the active computer (e.g. /metamcpthp
+        // for ThinkPad). Pass it to the backend; do not alter local /metamcp routes.
+        _environment["METAMCP_PUBLIC_PATH"] = _settings.ReverseSsh.GetActiveMapping().PublicPath;
     }
 
     private void SetStartingStatus()
