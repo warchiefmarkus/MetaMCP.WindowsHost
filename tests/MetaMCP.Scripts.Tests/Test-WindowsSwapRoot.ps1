@@ -32,6 +32,24 @@ try {
         }
         Write-Host "PASS $($test.Label)"
     }
+
+    # A real swap cannot run without a stable Host EXE. Verify that the
+    # recovery fails immediately and never manufactures current.json.
+    [IO.File]::WriteAllText(
+        (Join-Path $config 'host.json'),
+        '{"BackendPort":12009,"HostControlToken":"test-token"}',
+        [Text.UTF8Encoding]::new($false))
+    $ErrorActionPreference = 'Continue'
+    $output = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $scripts 'Swap-WindowsRuntime.ps1') -Root $temp 2>&1 | Out-String)
+    $exitCode = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+    if ($exitCode -eq 0 -or $output -notmatch 'Stable MetaMCP Host executable not found') {
+        throw "Missing Host EXE guard failed: $output"
+    }
+    if (Test-Path (Join-Path $temp 'current.json')) {
+        throw 'Swap incorrectly manufactured current.json.'
+    }
+    Write-Host 'PASS missing Host EXE refuses swap without creating current.json'
 }
 finally {
     Remove-Item $temp -Force -Recurse -ErrorAction SilentlyContinue
