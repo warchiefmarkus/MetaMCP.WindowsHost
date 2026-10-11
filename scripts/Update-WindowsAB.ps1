@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [string]$Repository = 'C:\DEV\LLM\metamcp',
     [switch]$InstallDependencies,
@@ -25,5 +25,6 @@ if (-not $SwapOnly) {
     }
 }
 
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $swap
+$root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $swap -Root $root
 if ($LASTEXITCODE -ne 0) { throw "Runtime swap failed with exit code $LASTEXITCODE." }

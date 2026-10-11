@@ -3,10 +3,15 @@ param(
     [ValidateSet('A','B')]
     [string]$Slot,
     [switch]$Status,
-    [string]$Root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+    [string]$Root
 )
 
 $ErrorActionPreference = 'Stop'
+# PowerShell 5.1 can evaluate parameter defaults before $PSScriptRoot is
+# populated. Resolve the repository root only after entering the script body.
+if ([string]::IsNullOrWhiteSpace($Root)) {
+    $Root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+}
 $root = [IO.Path]::GetFullPath($Root)
 $configPath = Join-Path $root 'config\host.json'
 if (-not (Test-Path $configPath)) {
