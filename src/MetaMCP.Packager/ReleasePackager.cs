@@ -86,9 +86,10 @@ internal sealed class ReleasePackager
                     buildEnvironment, StringComparer.OrdinalIgnoreCase)
                 {
                     ["CI"] = "true",
+                    ["NODE_ENV"] = "development", // Ensure devDependencies with pnpm 9 and 12.
                 };
                 await RunPnpmAsync(
-                    ["install", "--no-frozen-lockfile", "--prod=false"],
+                    ["install", "--no-frozen-lockfile"],
                     installEnvironment,
                     cancellationToken);
             }
